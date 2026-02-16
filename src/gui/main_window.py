@@ -3,6 +3,7 @@ import os
 import sys
 import socket
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -11,7 +12,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QTextEdit, QSplitter, QStatusBar, QMenuBar, QMenu, QMessageBox,
     QProgressBar, QFormLayout, QGridLayout, QApplication, QAbstractItemView,
-    QDialog, QDialogButtonBox, QInputDialog, QScrollArea,
+    QDialog, QDialogButtonBox, QInputDialog, QScrollArea, QStackedWidget,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QMimeData, QUrl
 from PyQt6.QtGui import QAction, QDragEnterEvent, QDropEvent, QIcon, QShortcut, QKeySequence, QFont, QColor
@@ -838,6 +839,7 @@ class MainWindow(QMainWindow):
     find_master_signal = pyqtSignal(str)  # found master IP or empty string
     update_check_signal = pyqtSignal(str, bool)  # (version, success)
     slave_force_update_signal = pyqtSignal()  # slave received force update command
+    slave_connection_signal = pyqtSignal(bool)  # slave connected/disconnected
 
     def __init__(self, config: AppConfig, initial_files=None, add_to_queue_files=None):
         super().__init__()
@@ -1435,7 +1437,48 @@ class MainWindow(QMainWindow):
         self.slaves_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.slaves_table.customContextMenuRequested.connect(self._show_slave_context_menu)
         slaves_layout.addWidget(self.slaves_table)
-        farm_splitter.addWidget(slaves_widget)
+
+        # Left (slave mode): Slave Status info panel
+        slave_info_widget = QWidget()
+        slave_info_layout = QVBoxLayout(slave_info_widget)
+        slave_info_layout.setContentsMargins(0, 0, 0, 0)
+        slave_info_layout.addWidget(QLabel("Slave Status"))
+
+        slave_info_group = QGroupBox()
+        slave_info_form = QFormLayout(slave_info_group)
+
+        self.lbl_slave_hostname = QLabel("-")
+        slave_info_form.addRow("Hostname:", self.lbl_slave_hostname)
+
+        self.lbl_slave_master = QLabel("-")
+        slave_info_form.addRow("Master:", self.lbl_slave_master)
+
+        self.lbl_slave_connection = QLabel("-")
+        slave_info_form.addRow("Connection:", self.lbl_slave_connection)
+
+        self.lbl_slave_render_mode = QLabel("-")
+        slave_info_form.addRow("Render Mode:", self.lbl_slave_render_mode)
+
+        self.lbl_slave_workers = QLabel("-")
+        slave_info_form.addRow("Workers:", self.lbl_slave_workers)
+
+        self.lbl_slave_completed = QLabel("0")
+        slave_info_form.addRow("Jobs Completed:", self.lbl_slave_completed)
+
+        self.lbl_slave_failed = QLabel("0")
+        slave_info_form.addRow("Jobs Failed:", self.lbl_slave_failed)
+
+        self.lbl_slave_uptime = QLabel("-")
+        slave_info_form.addRow("Uptime:", self.lbl_slave_uptime)
+
+        slave_info_layout.addWidget(slave_info_group)
+        slave_info_layout.addStretch()
+
+        # QStackedWidget for left panel: page 0 = slaves table, page 1 = slave info
+        self.farm_left_stack = QStackedWidget()
+        self.farm_left_stack.addWidget(slaves_widget)
+        self.farm_left_stack.addWidget(slave_info_widget)
+        farm_splitter.addWidget(self.farm_left_stack)
 
         # Right: Farm Queue
         farm_queue_widget = QWidget()
@@ -1511,6 +1554,13 @@ class MainWindow(QMainWindow):
         farm_controls.addWidget(self.btn_force_update_slaves)
         farm_controls.addStretch()
         layout.addLayout(farm_controls)
+
+        # Master-only buttons (hidden in slave mode)
+        self._master_only_farm_buttons = [
+            self.btn_add_jobs_to_farm, self.btn_add_folder_to_farm,
+            self.btn_start_farm_queue, self.btn_stop_farm_queue,
+            self.btn_force_update_slaves,
+        ]
 
         # Farm stats bar
         stats_layout = QHBoxLayout()
@@ -1745,6 +1795,7 @@ class MainWindow(QMainWindow):
         self.find_master_signal.connect(self._on_master_found)
         self.update_check_signal.connect(self._on_update_result)
         self.slave_force_update_signal.connect(self._on_slave_force_update)
+        self.slave_connection_signal.connect(self._update_slave_connection_label)
 
         # Queue controls
         self.btn_add_files.clicked.connect(self._add_files)
@@ -3049,10 +3100,12 @@ class MainWindow(QMainWindow):
         self.slave_client.render_enabled = self.chk_render_enabled.isChecked()
         self.slave_client.farm_renders_dir = self.config.get("farm_renders_dir", "")
         self.slave_client.on_output = lambda msg: self.farm_log_signal.emit(f"[SLAVE] {msg}")
-        self.slave_client.on_connected = lambda: self.farm_status_signal.emit(
-            f"Slave connected to {host}:{port}", "#a6e3a1")
-        self.slave_client.on_disconnected = lambda: self.farm_status_signal.emit(
-            f"Slave disconnected from {host}:{port}", "#f38ba8")
+        self.slave_client.on_connected = lambda: (
+            self.farm_status_signal.emit(f"Slave connected to {host}:{port}", "#a6e3a1"),
+            self.slave_connection_signal.emit(True))
+        self.slave_client.on_disconnected = lambda: (
+            self.farm_status_signal.emit(f"Slave disconnected from {host}:{port}", "#f38ba8"),
+            self.slave_connection_signal.emit(False))
         self.slave_client.on_status_changed = lambda s: self.farm_status_signal.emit(
             f"Slave: {s}", "#a6e3a1")
         self.slave_client.on_job_started = lambda j: self.farm_queue_changed_signal.emit()
@@ -3074,6 +3127,24 @@ class MainWindow(QMainWindow):
         self.config.set("network_master_host", host)
         self.config.set("network_port", port)
 
+        # Switch to slave info panel and hide master-only buttons
+        self._slave_start_time = time.time()
+        self.farm_left_stack.setCurrentIndex(1)
+        for btn in self._master_only_farm_buttons:
+            btn.setVisible(False)
+
+        # Initialize slave info labels
+        self.lbl_slave_hostname.setText(self.slave_client.hostname)
+        self.lbl_slave_master.setText(f"{host}:{port}")
+        self.lbl_slave_connection.setText("Connecting...")
+        self.lbl_slave_connection.setStyleSheet("color: #f9e2af;")
+        mode = "render+submit" if self.slave_client.render_enabled else "submit-only"
+        self.lbl_slave_render_mode.setText(mode)
+        self.lbl_slave_workers.setText(f"0/{self.slave_client._max_concurrent}")
+        self.lbl_slave_completed.setText("0")
+        self.lbl_slave_failed.setText("0")
+        self.lbl_slave_uptime.setText("0s")
+
     def _on_render_enabled_toggled(self, checked):
         """Toggle render-enabled flag on the slave client."""
         self.config.set("slave_render_enabled", checked)
@@ -3081,6 +3152,7 @@ class MainWindow(QMainWindow):
             self.slave_client.render_enabled = checked
             mode = "render+submit" if checked else "submit-only"
             self._append_farm_log(f"[SLAVE] Render mode changed: {mode}")
+            self._refresh_slave_info()
 
     def _stop_slave(self):
         if hasattr(self, '_slave_queue_timer'):
@@ -3097,6 +3169,54 @@ class MainWindow(QMainWindow):
         self.lbl_farm_stats.setText("Farm: not running")
         self.lbl_farm_total_time.setText("")
         self.farm_queue_table.setRowCount(0)
+
+        # Restore master view
+        self.farm_left_stack.setCurrentIndex(0)
+        for btn in self._master_only_farm_buttons:
+            btn.setVisible(True)
+        self._slave_start_time = None
+
+    def _update_slave_connection_label(self, connected: bool):
+        """Update slave info panel connection status (called via signal from GUI thread)."""
+        if connected:
+            self.lbl_slave_connection.setText("Connected")
+            self.lbl_slave_connection.setStyleSheet("color: #a6e3a1;")
+        else:
+            self.lbl_slave_connection.setText("Disconnected")
+            self.lbl_slave_connection.setStyleSheet("color: #f38ba8;")
+
+    def _refresh_slave_info(self):
+        """Update the slave status info panel with current slave data."""
+        if not self.slave_client:
+            return
+
+        # Workers: active / total
+        active_count = len(self.slave_client.current_jobs)
+        total_workers = self.slave_client._max_concurrent
+        self.lbl_slave_workers.setText(f"{active_count}/{total_workers}")
+
+        # Render mode (may change at runtime via checkbox)
+        mode = "render+submit" if self.slave_client.render_enabled else "submit-only"
+        self.lbl_slave_render_mode.setText(mode)
+
+        # Completed / Failed counts
+        completed_jobs = self.slave_client.completed_jobs
+        completed_count = sum(1 for j in completed_jobs if j.status == RenderStatus.COMPLETED.value)
+        failed_count = sum(1 for j in completed_jobs if j.status != RenderStatus.COMPLETED.value)
+        self.lbl_slave_completed.setText(str(completed_count))
+        self.lbl_slave_failed.setText(str(failed_count))
+
+        # Uptime
+        if hasattr(self, '_slave_start_time') and self._slave_start_time:
+            elapsed = int(time.time() - self._slave_start_time)
+            mins, secs = divmod(elapsed, 60)
+            hours, mins = divmod(mins, 60)
+            if hours:
+                self.lbl_slave_uptime.setText(f"{hours}h {mins}m {secs}s")
+            elif mins:
+                self.lbl_slave_uptime.setText(f"{mins}m {secs}s")
+            else:
+                self.lbl_slave_uptime.setText(f"{secs}s")
 
     def _refresh_slaves(self):
         if not self.master_server:
@@ -3276,6 +3396,9 @@ class MainWindow(QMainWindow):
             self.lbl_farm_total_time.setText(f"Total render time: {time_str}")
         else:
             self.lbl_farm_total_time.setText("")
+
+        # Update slave info panel
+        self._refresh_slave_info()
 
     # --- Farm: Send to Farm ---
     def _show_send_to_farm_dialog(self, job_count):
@@ -3747,11 +3870,14 @@ class MainWindow(QMainWindow):
 
     def _clear_completed_farm_jobs(self):
         """Clear completed/failed/cancelled farm job history."""
-        if not self.master_server:
-            return
-        self.master_server.clear_completed_farm_jobs()
-        self._append_farm_log("[GUI] Cleared completed farm jobs")
-        self._refresh_farm_queue_table()
+        if self.master_server:
+            self.master_server.clear_completed_farm_jobs()
+            self._append_farm_log("[GUI] Cleared completed farm jobs")
+            self._refresh_farm_queue_table()
+        elif self.slave_client:
+            self.slave_client.completed_jobs.clear()
+            self._append_farm_log("[GUI] Cleared completed slave jobs")
+            self._refresh_farm_queue_table()
 
     def _force_update_slaves(self):
         """Force all connected slaves to update to the latest version."""

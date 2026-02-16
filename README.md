@@ -401,6 +401,9 @@ Render logs are auto-saved to `%APPDATA%\MohoRenderFarm\logs\`.
 
 ## Changelog
 
+### v1.6.5
+- **Slave mode Farm tab UI** - When running as a slave, the empty "Connected Slaves" panel is replaced with a "Slave Status" info panel showing hostname, master server, connection status, render mode, active workers, completed/failed job counts, and uptime. Master-only buttons are hidden in slave mode. "Clear Completed" now works for slave job history.
+
 ### v1.6.4
 - **GUI tooltips and help** - Added descriptive tooltips to all buttons, checkboxes, and input fields across all tabs for easier onboarding of new users
 - **Auto-apply staged updates** - Downloaded updates that were not installed are now automatically applied on the next app startup
