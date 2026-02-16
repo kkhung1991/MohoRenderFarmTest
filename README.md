@@ -401,6 +401,9 @@ Render logs are auto-saved to `%APPDATA%\MohoRenderFarm\logs\`.
 
 ## Changelog
 
+### v1.6.6
+- **Fix slave render re-enable not syncing to master** - When a slave re-activated "Accept render jobs from farm", the master kept showing the slave as disabled. The heartbeat now correctly syncs the render-enabled state in both directions.
+
 ### v1.6.5
 - **Slave mode Farm tab UI** - When running as a slave, the empty "Connected Slaves" panel is replaced with a "Slave Status" info panel showing hostname, master server, connection status, render mode, active workers, completed/failed job counts, and uptime. Master-only buttons are hidden in slave mode. "Clear Completed" now works for slave job history.
 

@@ -132,10 +132,9 @@ class MasterServer:
                 if key in self.slaves:
                     self.slaves[key].last_heartbeat = time.time()
                     self.slaves[key].status = data.get("status", "idle")
-                    # Update render_enabled from slave (only if not overridden by master)
+                    # Sync render_enabled from slave
                     slave_render = data.get("render_enabled", True)
-                    if slave_render is False:
-                        self.slaves[key].render_enabled = False
+                    self.slaves[key].render_enabled = slave_render
                 if key in self.active_jobs and self._cancel_requests:
                     job = self.active_jobs[key]
                     if job.id in self._cancel_requests:
