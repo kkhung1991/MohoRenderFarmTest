@@ -306,9 +306,11 @@ class EditSettingsDialog(QDialog):
         self.combo_render_preset.currentTextChanged.connect(self._on_preset_selected)
         preset_layout.addWidget(self.combo_render_preset)
         self.btn_save_preset = QPushButton("Save Preset")
+        self.btn_save_preset.setToolTip("Save current render settings as a reusable preset")
         self.btn_save_preset.clicked.connect(self._save_preset)
         preset_layout.addWidget(self.btn_save_preset)
         self.btn_delete_preset = QPushButton("Delete Preset")
+        self.btn_delete_preset.setToolTip("Delete the selected preset")
         self.btn_delete_preset.clicked.connect(self._delete_preset)
         preset_layout.addWidget(self.btn_delete_preset)
         preset_layout.addStretch()
@@ -316,6 +318,7 @@ class EditSettingsDialog(QDialog):
 
         # --- Output Settings ---
         self.chk_apply_output = QCheckBox("Apply Output Settings")
+        self.chk_apply_output.setToolTip("Check to apply the output settings below to the selected job(s)")
         layout.addWidget(self.chk_apply_output)
 
         self.output_group = QGroupBox("Output Settings")
@@ -324,14 +327,17 @@ class EditSettingsDialog(QDialog):
         self.combo_format = QComboBox()
         self.combo_format.addItems(FORMATS)
         self.combo_format.currentTextChanged.connect(self._update_presets)
+        self.combo_format.setToolTip("Output file format (video or image sequence)")
         output_form.addRow("Format:", self.combo_format)
 
         self.combo_preset = QComboBox()
         self._update_presets()
+        self.combo_preset.setToolTip("Codec/compression preset for the selected format")
         output_form.addRow("Preset/Codec:", self.combo_preset)
 
         self.edit_output_dir = QLineEdit()
         self.edit_output_dir.setPlaceholderText("Same folder as project file (default)")
+        self.edit_output_dir.setToolTip("Folder where rendered files will be saved.\nLeave empty to render in the same folder as the project file.")
         browse_btn = QPushButton("Browse...")
         browse_btn.setFixedWidth(browse_btn.sizeHint().width() + 10)
         browse_btn.clicked.connect(self._browse_output_dir)
@@ -342,6 +348,7 @@ class EditSettingsDialog(QDialog):
 
         self.chk_subfolder_project = QCheckBox("Create subfolder with project name")
         self.chk_subfolder_project.setChecked(True)
+        self.chk_subfolder_project.setToolTip("Create a subfolder named after the project inside the output folder.\nExample: OutputFolder/MyProject/MyProject.mp4")
         output_form.addRow("", self.chk_subfolder_project)
 
         self.output_group.setEnabled(False)
@@ -350,12 +357,14 @@ class EditSettingsDialog(QDialog):
 
         # --- Frame Range ---
         self.chk_apply_frames = QCheckBox("Apply Frame Range")
+        self.chk_apply_frames.setToolTip("Check to apply the frame range below to the selected job(s)")
         layout.addWidget(self.chk_apply_frames)
 
         self.frame_group = QGroupBox("Frame Range")
         frame_layout = QHBoxLayout(self.frame_group)
 
         self.chk_custom_frames = QCheckBox("Custom frame range")
+        self.chk_custom_frames.setToolTip("Override the project's frame range with custom start/end frames")
         frame_layout.addWidget(self.chk_custom_frames)
 
         frame_layout.addWidget(QLabel("Start:"))
@@ -382,6 +391,7 @@ class EditSettingsDialog(QDialog):
 
         # --- Render Options ---
         self.chk_apply_options = QCheckBox("Apply Render Options")
+        self.chk_apply_options.setToolTip("Check to apply the render options below to the selected job(s)")
         layout.addWidget(self.chk_apply_options)
 
         self.options_group = QGroupBox("Render Options")
@@ -389,22 +399,33 @@ class EditSettingsDialog(QDialog):
 
         self.chk_multithread = QCheckBox("Multi-threaded rendering")
         self.chk_multithread.setChecked(True)
+        self.chk_multithread.setToolTip("Use multiple CPU cores for faster rendering")
         self.chk_halfsize = QCheckBox("Render at half size")
+        self.chk_halfsize.setToolTip("Render at half the project resolution (faster preview)")
         self.chk_halffps = QCheckBox("Render at half frame rate")
+        self.chk_halffps.setToolTip("Skip every other frame (faster preview)")
         self.chk_shapefx = QCheckBox("Apply shape effects")
         self.chk_shapefx.setChecked(True)
+        self.chk_shapefx.setToolTip("Enable shape-level effects (shadows, glow, etc.)")
         self.chk_layerfx = QCheckBox("Apply layer effects")
         self.chk_layerfx.setChecked(True)
+        self.chk_layerfx.setToolTip("Enable layer-level effects (blur, shadows, etc.)")
         self.chk_fewparticles = QCheckBox("Reduced particles")
+        self.chk_fewparticles.setToolTip("Use fewer particles for faster rendering")
         self.chk_aa = QCheckBox("Antialiased edges")
         self.chk_aa.setChecked(True)
+        self.chk_aa.setToolTip("Smooth edges on shapes and lines")
         self.chk_extrasmooth = QCheckBox("Extra-smooth images")
         self.chk_extrasmooth.setChecked(True)
+        self.chk_extrasmooth.setToolTip("Higher quality anti-aliasing for imported images")
         self.chk_premultiply = QCheckBox("Premultiply alpha")
         self.chk_premultiply.setChecked(True)
+        self.chk_premultiply.setToolTip("Premultiply RGB by alpha (recommended for compositing)")
         self.chk_ntscsafe = QCheckBox("NTSC safe colors")
+        self.chk_ntscsafe.setToolTip("Clamp colors to NTSC broadcast-safe range")
         self.chk_verbose = QCheckBox("Verbose output")
         self.chk_verbose.setChecked(True)
+        self.chk_verbose.setToolTip("Show detailed frame-by-frame progress in the log")
 
         options_grid.addWidget(self.chk_multithread, 0, 0)
         options_grid.addWidget(self.chk_halfsize, 0, 1)
@@ -420,6 +441,7 @@ class EditSettingsDialog(QDialog):
 
         self.chk_copy_images = QCheckBox("Copy \\Images to project root (fix offline media)")
         self.chk_copy_images.setChecked(True)
+        self.chk_copy_images.setToolTip("Copy the Images folder next to the project file to fix missing media references.\nUseful when projects reference media from a shared \\Images folder.")
         options_grid.addWidget(self.chk_copy_images, 4, 0, 1, 3)
 
         self.options_group.setEnabled(False)
@@ -428,6 +450,7 @@ class EditSettingsDialog(QDialog):
 
         # --- Layer Compositions ---
         self.chk_apply_layercomp = QCheckBox("Apply Layer Comp Settings")
+        self.chk_apply_layercomp.setToolTip("Check to apply the layer comp settings below to the selected job(s)")
         layout.addWidget(self.chk_apply_layercomp)
 
         self.lc_group = QGroupBox("Layer Compositions")
@@ -435,20 +458,25 @@ class EditSettingsDialog(QDialog):
 
         lc_row = QHBoxLayout()
         self.chk_allcomps = QCheckBox("Render AllComps")
+        self.chk_allcomps.setToolTip("Render all layer compositions defined in the project.\nEach comp is rendered as a separate file.")
         self.chk_allcomps.toggled.connect(self._on_allcomps_toggled)
         lc_row.addWidget(self.chk_allcomps)
         lc_row.addSpacing(20)
         lc_row.addWidget(QLabel("Custom Layer Comp:"))
         self.edit_layercomp = QLineEdit()
         self.edit_layercomp.setPlaceholderText("Enter comp name or AllLayerComps")
+        self.edit_layercomp.setToolTip("Enter a specific layer comp name, or 'AllLayerComps' to render all.\nLeave empty to render the default comp only.")
         lc_row.addWidget(self.edit_layercomp, 1)
         lc_layout.addRow("", lc_row)
 
         self.chk_addlayercompsuffix = QCheckBox("Add layer comp suffix to filename")
         self.chk_addlayercompsuffix.setChecked(True)
+        self.chk_addlayercompsuffix.setToolTip("Append the layer comp name to the output filename.\nExample: project_CompName.mp4")
         self.chk_createfolderforlayercomp = QCheckBox("Create folder for each layer comp")
         self.chk_createfolderforlayercomp.setChecked(True)
+        self.chk_createfolderforlayercomp.setToolTip("Create a separate subfolder for each layer comp's output files.")
         self.chk_addformatsuffix = QCheckBox("Add format suffix to filename")
+        self.chk_addformatsuffix.setToolTip("Append the format name (e.g. _MP4) to the output filename.")
 
         lc_opts = QHBoxLayout()
         lc_opts.addWidget(self.chk_addlayercompsuffix)
@@ -458,8 +486,10 @@ class EditSettingsDialog(QDialog):
 
         self.chk_compose_layers = QCheckBox("Auto-compose all layer comps into MP4 with ffmpeg")
         self.chk_compose_layers.setChecked(True)
+        self.chk_compose_layers.setToolTip("After rendering all layer comps, automatically combine them\ninto a single MP4 video using ffmpeg.")
         self.chk_compose_reverse = QCheckBox("Reverse layer order")
         self.chk_compose_reverse.setChecked(True)
+        self.chk_compose_reverse.setToolTip("Reverse the alphabetical order of layer comps when composing.\nFirst alphabetically becomes the background layer.")
         compose_row = QHBoxLayout()
         compose_row.addWidget(self.chk_compose_layers)
         compose_row.addWidget(self.chk_compose_reverse)
@@ -471,6 +501,7 @@ class EditSettingsDialog(QDialog):
 
         # --- QT Options ---
         self.chk_apply_qt = QCheckBox("Apply QuickTime Options")
+        self.chk_apply_qt.setToolTip("Check to apply the QuickTime options below to the selected job(s)")
         layout.addWidget(self.chk_apply_qt)
 
         self.qt_group = QGroupBox("QuickTime Options (QT format only)")
@@ -480,11 +511,13 @@ class EditSettingsDialog(QDialog):
         for val, name in QUALITY_LEVELS.items():
             self.combo_quality.addItem(f"{val} - {name}", val)
         self.combo_quality.setCurrentIndex(3)
+        self.combo_quality.setToolTip("Compression quality level for QuickTime format")
         qt_layout.addRow("Quality:", self.combo_quality)
 
         self.spin_depth = QSpinBox()
         self.spin_depth.setRange(1, 32)
         self.spin_depth.setValue(24)
+        self.spin_depth.setToolTip("Color depth in bits per pixel (24 = RGB, 32 = RGBA with alpha)")
         qt_layout.addRow("Pixel Depth:", self.spin_depth)
 
         self.qt_group.setEnabled(False)
@@ -934,7 +967,9 @@ class MainWindow(QMainWindow):
 
         self.btn_add_files = QPushButton("Add Projects")
         self.btn_add_files.setObjectName("primaryBtn")
+        self.btn_add_files.setToolTip("Add one or more .moho project files to the render queue")
         self.btn_add_folder = QPushButton("Add Folder")
+        self.btn_add_folder.setToolTip("Add all .moho files from a folder to the render queue")
         row1.addWidget(self.btn_add_files)
         row1.addWidget(self.btn_add_folder)
 
@@ -944,9 +979,12 @@ class MainWindow(QMainWindow):
         self.btn_start_job.setToolTip("Start only the selected job(s)")
         self.btn_start_queue = QPushButton("Start Queue")
         self.btn_start_queue.setObjectName("successBtn")
+        self.btn_start_queue.setToolTip("Start rendering all pending jobs in the queue")
         self.btn_pause_queue = QPushButton("Pause")
+        self.btn_pause_queue.setToolTip("Pause the queue after the current job finishes")
         self.btn_stop_queue = QPushButton("Stop")
         self.btn_stop_queue.setObjectName("dangerBtn")
+        self.btn_stop_queue.setToolTip("Stop the queue and cancel the current render")
         row1.addWidget(self.btn_start_job)
         row1.addWidget(self.btn_start_queue)
         row1.addWidget(self.btn_pause_queue)
@@ -955,7 +993,9 @@ class MainWindow(QMainWindow):
         row1.addSpacing(20)
 
         self.btn_clear_completed = QPushButton("Clear Completed")
+        self.btn_clear_completed.setToolTip("Remove finished jobs (completed, failed, cancelled) from the queue")
         self.btn_clear_all = QPushButton("Clear All")
+        self.btn_clear_all.setToolTip("Remove all non-rendering jobs from the queue")
         row1.addWidget(self.btn_clear_completed)
         row1.addWidget(self.btn_clear_all)
 
@@ -976,14 +1016,16 @@ class MainWindow(QMainWindow):
         row2.addSpacing(20)
 
         self.btn_auto_compose = QPushButton("Auto-Compose")
-        self.btn_auto_compose.setToolTip("Select a folder with layer comp PNG sequences to compose into MP4")
+        self.btn_auto_compose.setToolTip("Compose layer comp image sequences into a single MP4 using ffmpeg.\nSelect a folder containing subfolders with PNG/JPEG/TGA/BMP sequences.")
         self.btn_auto_compose.clicked.connect(self._auto_compose)
         row2.addWidget(self.btn_auto_compose)
 
         row2.addStretch()
 
         self.btn_save_queue = QPushButton("Save Queue")
+        self.btn_save_queue.setToolTip("Save the current queue to a JSON file")
         self.btn_load_queue = QPushButton("Load Queue")
+        self.btn_load_queue.setToolTip("Load a previously saved queue from a JSON file")
         row2.addWidget(self.btn_save_queue)
         row2.addWidget(self.btn_load_queue)
 
@@ -1062,12 +1104,15 @@ class MainWindow(QMainWindow):
         self.combo_render_preset.currentTextChanged.connect(self._on_preset_selected)
         preset_layout.addWidget(self.combo_render_preset)
         self.btn_save_preset = QPushButton("Save Preset")
+        self.btn_save_preset.setToolTip("Save current render settings as a reusable preset")
         self.btn_save_preset.clicked.connect(self._save_preset)
         preset_layout.addWidget(self.btn_save_preset)
         self.btn_delete_preset = QPushButton("Delete Preset")
+        self.btn_delete_preset.setToolTip("Delete the selected preset")
         self.btn_delete_preset.clicked.connect(self._delete_preset)
         preset_layout.addWidget(self.btn_delete_preset)
         self.chk_default_preset = QCheckBox("Set as Default")
+        self.chk_default_preset.setToolTip("Use the selected preset as default for new jobs")
         self.chk_default_preset.toggled.connect(self._set_default_preset)
         preset_layout.addWidget(self.chk_default_preset)
         preset_layout.addStretch()
@@ -1081,14 +1126,17 @@ class MainWindow(QMainWindow):
         self.combo_format.addItems(FORMATS)
         self.combo_format.setCurrentText(self.config.get("default_format", "MP4"))
         self.combo_format.currentTextChanged.connect(self._on_format_changed)
+        self.combo_format.setToolTip("Output file format (video or image sequence)")
         output_form.addRow("Format:", self.combo_format)
 
         self.combo_preset = QComboBox()
         self._update_presets()
+        self.combo_preset.setToolTip("Codec/compression preset for the selected format")
         output_form.addRow("Preset/Codec:", self.combo_preset)
 
         self.edit_output_dir = QLineEdit()
         self.edit_output_dir.setPlaceholderText("Same folder as project file (default)")
+        self.edit_output_dir.setToolTip("Folder where rendered files will be saved.\nLeave empty to render in the same folder as the project file.")
         default_dir = self.config.get("default_output_dir", "") if self.config.get("default_output_mode", "project") == "custom" else ""
         self.edit_output_dir.setText(default_dir)
         browse_out = QPushButton("Browse...")
@@ -1101,6 +1149,7 @@ class MainWindow(QMainWindow):
 
         self.chk_subfolder_project = QCheckBox("Create subfolder with project name")
         self.chk_subfolder_project.setChecked(True)
+        self.chk_subfolder_project.setToolTip("Create a subfolder named after the project inside the output folder.\nExample: OutputFolder/MyProject/MyProject.mp4")
         output_form.addRow("", self.chk_subfolder_project)
 
         layout.addWidget(output_group)
@@ -1110,6 +1159,7 @@ class MainWindow(QMainWindow):
         frame_layout = QHBoxLayout(frame_group)
 
         self.chk_custom_frames = QCheckBox("Custom frame range")
+        self.chk_custom_frames.setToolTip("Override the project's frame range with custom start/end frames")
         frame_layout.addWidget(self.chk_custom_frames)
 
         frame_layout.addWidget(QLabel("Start:"))
@@ -1138,22 +1188,33 @@ class MainWindow(QMainWindow):
 
         self.chk_multithread = QCheckBox("Multi-threaded rendering")
         self.chk_multithread.setChecked(True)
+        self.chk_multithread.setToolTip("Use multiple CPU cores for faster rendering")
         self.chk_halfsize = QCheckBox("Render at half size")
+        self.chk_halfsize.setToolTip("Render at half the project resolution (faster preview)")
         self.chk_halffps = QCheckBox("Render at half frame rate")
+        self.chk_halffps.setToolTip("Skip every other frame (faster preview)")
         self.chk_shapefx = QCheckBox("Apply shape effects")
         self.chk_shapefx.setChecked(True)
+        self.chk_shapefx.setToolTip("Enable shape-level effects (shadows, glow, etc.)")
         self.chk_layerfx = QCheckBox("Apply layer effects")
         self.chk_layerfx.setChecked(True)
+        self.chk_layerfx.setToolTip("Enable layer-level effects (blur, shadows, etc.)")
         self.chk_fewparticles = QCheckBox("Reduced particles")
+        self.chk_fewparticles.setToolTip("Use fewer particles for faster rendering")
         self.chk_aa = QCheckBox("Antialiased edges")
         self.chk_aa.setChecked(True)
+        self.chk_aa.setToolTip("Smooth edges on shapes and lines")
         self.chk_extrasmooth = QCheckBox("Extra-smooth images")
         self.chk_extrasmooth.setChecked(True)
+        self.chk_extrasmooth.setToolTip("Higher quality anti-aliasing for imported images")
         self.chk_premultiply = QCheckBox("Premultiply alpha")
         self.chk_premultiply.setChecked(True)
+        self.chk_premultiply.setToolTip("Premultiply RGB by alpha (recommended for compositing)")
         self.chk_ntscsafe = QCheckBox("NTSC safe colors")
+        self.chk_ntscsafe.setToolTip("Clamp colors to NTSC broadcast-safe range")
         self.chk_verbose = QCheckBox("Verbose output")
         self.chk_verbose.setChecked(True)
+        self.chk_verbose.setToolTip("Show detailed frame-by-frame progress in the log")
 
         options_grid.addWidget(self.chk_multithread, 0, 0)
         options_grid.addWidget(self.chk_halfsize, 0, 1)
@@ -1169,6 +1230,7 @@ class MainWindow(QMainWindow):
 
         self.chk_copy_images = QCheckBox("Copy \\Images to project root (fix offline media)")
         self.chk_copy_images.setChecked(True)
+        self.chk_copy_images.setToolTip("Copy the Images folder next to the project file to fix missing media references.\nUseful when projects reference media from a shared \\Images folder.")
         options_grid.addWidget(self.chk_copy_images, 4, 0, 1, 3)
 
         layout.addWidget(options_group)
@@ -1179,20 +1241,25 @@ class MainWindow(QMainWindow):
 
         lc_row = QHBoxLayout()
         self.chk_allcomps = QCheckBox("Render AllComps")
+        self.chk_allcomps.setToolTip("Render all layer compositions defined in the project.\nEach comp is rendered as a separate file.")
         self.chk_allcomps.toggled.connect(self._on_allcomps_toggled)
         lc_row.addWidget(self.chk_allcomps)
         lc_row.addSpacing(20)
         lc_row.addWidget(QLabel("Custom Layer Comp:"))
         self.edit_layercomp = QLineEdit()
         self.edit_layercomp.setPlaceholderText("Enter comp name or AllLayerComps")
+        self.edit_layercomp.setToolTip("Enter a specific layer comp name, or 'AllLayerComps' to render all.\nLeave empty to render the default comp only.")
         lc_row.addWidget(self.edit_layercomp, 1)
         lc_layout.addRow("", lc_row)
 
         self.chk_addlayercompsuffix = QCheckBox("Add layer comp suffix to filename")
         self.chk_addlayercompsuffix.setChecked(True)
+        self.chk_addlayercompsuffix.setToolTip("Append the layer comp name to the output filename.\nExample: project_CompName.mp4")
         self.chk_createfolderforlayercomp = QCheckBox("Create folder for each layer comp")
         self.chk_createfolderforlayercomp.setChecked(True)
+        self.chk_createfolderforlayercomp.setToolTip("Create a separate subfolder for each layer comp's output files.")
         self.chk_addformatsuffix = QCheckBox("Add format suffix to filename")
+        self.chk_addformatsuffix.setToolTip("Append the format name (e.g. _MP4) to the output filename.")
 
         lc_opts = QHBoxLayout()
         lc_opts.addWidget(self.chk_addlayercompsuffix)
@@ -1202,8 +1269,10 @@ class MainWindow(QMainWindow):
 
         self.chk_compose_layers = QCheckBox("Auto-compose all layer comps into MP4 with ffmpeg")
         self.chk_compose_layers.setChecked(True)
+        self.chk_compose_layers.setToolTip("After rendering all layer comps, automatically combine them\ninto a single MP4 video using ffmpeg.")
         self.chk_compose_reverse = QCheckBox("Reverse layer order (first alphabetically = background)")
         self.chk_compose_reverse.setChecked(True)
+        self.chk_compose_reverse.setToolTip("Reverse the alphabetical order of layer comps when composing.\nFirst alphabetically becomes the background layer.")
         compose_row = QHBoxLayout()
         compose_row.addWidget(self.chk_compose_layers)
         compose_row.addWidget(self.chk_compose_reverse)
@@ -1219,11 +1288,13 @@ class MainWindow(QMainWindow):
         for val, name in QUALITY_LEVELS.items():
             self.combo_quality.addItem(f"{val} - {name}", val)
         self.combo_quality.setCurrentIndex(3)
+        self.combo_quality.setToolTip("Compression quality level for QuickTime format")
         qt_layout.addRow("Quality:", self.combo_quality)
 
         self.spin_depth = QSpinBox()
         self.spin_depth.setRange(1, 32)
         self.spin_depth.setValue(24)
+        self.spin_depth.setToolTip("Color depth in bits per pixel (24 = RGB, 32 = RGBA with alpha)")
         qt_layout.addRow("Pixel Depth:", self.spin_depth)
 
         layout.addWidget(qt_group)
@@ -1242,8 +1313,10 @@ class MainWindow(QMainWindow):
         mode_row = QHBoxLayout()
         self.btn_start_master = QPushButton("Start as Master")
         self.btn_start_master.setObjectName("primaryBtn")
+        self.btn_start_master.setToolTip("Start this machine as the farm master that coordinates and dispatches jobs to slaves")
         self.btn_stop_master = QPushButton("Stop Master")
         self.btn_stop_master.setObjectName("dangerBtn")
+        self.btn_stop_master.setToolTip("Stop the master server and disconnect all slaves")
         self.btn_stop_master.setEnabled(False)
         mode_row.addWidget(self.btn_start_master)
         mode_row.addWidget(self.btn_stop_master)
@@ -1251,8 +1324,10 @@ class MainWindow(QMainWindow):
 
         self.btn_start_slave = QPushButton("Start as Slave")
         self.btn_start_slave.setObjectName("primaryBtn")
+        self.btn_start_slave.setToolTip("Connect to a master server as a render slave to receive and process jobs")
         self.btn_stop_slave = QPushButton("Stop Slave")
         self.btn_stop_slave.setObjectName("dangerBtn")
+        self.btn_stop_slave.setToolTip("Disconnect from the master server")
         self.btn_stop_slave.setEnabled(False)
         mode_row.addWidget(self.btn_start_slave)
         mode_row.addWidget(self.btn_stop_slave)
@@ -1265,12 +1340,14 @@ class MainWindow(QMainWindow):
         self.edit_master_host = QLineEdit()
         self.edit_master_host.setText(self.config.get("network_master_host", "localhost"))
         self.edit_master_host.setFixedWidth(200)
+        self.edit_master_host.setToolTip("IP address or hostname of the master server.\nUse 'localhost' if master runs on this machine.")
         conn_row.addWidget(self.edit_master_host)
         conn_row.addWidget(QLabel("Port:"))
         self.spin_port = QSpinBox()
         self.spin_port.setRange(1024, 65535)
         self.spin_port.setValue(self.config.get("network_port", 5580))
         self.spin_port.setFixedWidth(100)
+        self.spin_port.setToolTip("Network port for master/slave communication (default: 5580)")
         conn_row.addWidget(self.spin_port)
         conn_row.addSpacing(10)
         self.btn_find_master = QPushButton("Find Master")
@@ -1476,6 +1553,7 @@ class MainWindow(QMainWindow):
 
         self.edit_moho_path = QLineEdit()
         self.edit_moho_path.setText(self.config.moho_path)
+        self.edit_moho_path.setToolTip("Full path to Moho.exe on this machine")
         browse_moho = QPushButton("Browse...")
         browse_moho.setFixedWidth(browse_moho.sizeHint().width() + 10)
         browse_moho.clicked.connect(self._browse_moho)
@@ -1506,6 +1584,7 @@ class MainWindow(QMainWindow):
         self.edit_default_output = QLineEdit()
         self.edit_default_output.setText(self.config.get("default_output_dir", ""))
         self.edit_default_output.setPlaceholderText("No custom folder set")
+        self.edit_default_output.setToolTip("Default folder for rendered output when using 'Custom folder' mode")
         browse_output = QPushButton("Browse...")
         browse_output.setFixedWidth(browse_output.sizeHint().width() + 10)
         browse_output.clicked.connect(self._browse_default_output)
@@ -1520,6 +1599,7 @@ class MainWindow(QMainWindow):
         current_mode = self.config.get("default_output_mode", "project")
         self.combo_default_output_mode.setCurrentIndex(1 if current_mode == "custom" else 0)
         self.combo_default_output_mode.currentIndexChanged.connect(self._on_default_output_mode_changed)
+        self.combo_default_output_mode.setToolTip("Where to save rendered files by default:\n- Project folder: next to the .moho file\n- Custom folder: in the folder specified above")
         output_layout.addRow("Default:", self.combo_default_output_mode)
 
         self.edit_default_output.textChanged.connect(self._on_default_output_dir_changed)
@@ -1562,8 +1642,10 @@ class MainWindow(QMainWindow):
         ctx_btns = QHBoxLayout()
         self.btn_register_ctx = QPushButton("Register Context Menu")
         self.btn_register_ctx.setObjectName("primaryBtn")
+        self.btn_register_ctx.setToolTip("Add right-click options for .moho files in Windows Explorer")
         self.btn_unregister_ctx = QPushButton("Unregister Context Menu")
         self.btn_unregister_ctx.setObjectName("dangerBtn")
+        self.btn_unregister_ctx.setToolTip("Remove the right-click options from Windows Explorer")
         ctx_btns.addWidget(self.btn_register_ctx)
         ctx_btns.addWidget(self.btn_unregister_ctx)
         ctx_btns.addStretch()
@@ -1578,12 +1660,16 @@ class MainWindow(QMainWindow):
         shortcut_btns = QGridLayout()
         self.btn_desktop_shortcut = QPushButton("Add Desktop Shortcut")
         self.btn_desktop_shortcut.setObjectName("primaryBtn")
+        self.btn_desktop_shortcut.setToolTip("Create a shortcut on the Desktop to launch Moho Render Farm")
         self.btn_startmenu_shortcut = QPushButton("Add to Start Menu")
         self.btn_startmenu_shortcut.setObjectName("primaryBtn")
+        self.btn_startmenu_shortcut.setToolTip("Add Moho Render Farm to the Windows Start Menu")
         self.btn_taskbar_shortcut = QPushButton("Pin to Taskbar")
         self.btn_taskbar_shortcut.setObjectName("primaryBtn")
+        self.btn_taskbar_shortcut.setToolTip("Pin Moho Render Farm to the Windows Taskbar")
         self.btn_startup_entry = QPushButton("Run on Startup")
         self.btn_startup_entry.setObjectName("primaryBtn")
+        self.btn_startup_entry.setToolTip("Launch Moho Render Farm automatically when Windows starts")
         shortcut_btns.addWidget(self.btn_desktop_shortcut, 0, 0)
         shortcut_btns.addWidget(self.btn_startmenu_shortcut, 0, 1)
         shortcut_btns.addWidget(self.btn_taskbar_shortcut, 0, 2)
@@ -1598,6 +1684,7 @@ class MainWindow(QMainWindow):
 
         self.chk_auto_updates = QCheckBox("Automatically check and install updates on startup")
         self.chk_auto_updates.setChecked(self.config.get("auto_check_updates", True))
+        self.chk_auto_updates.setToolTip("Check for new versions when the app starts and prompt to install")
         self.chk_auto_updates.stateChanged.connect(
             lambda state: self.config.set("auto_check_updates", state == Qt.CheckState.Checked.value))
         update_layout.addWidget(self.chk_auto_updates)
@@ -1605,6 +1692,7 @@ class MainWindow(QMainWindow):
         update_row = QHBoxLayout()
         self.btn_check_update = QPushButton("Check for Updates")
         self.btn_check_update.setObjectName("primaryBtn")
+        self.btn_check_update.setToolTip("Check GitHub for a newer version and download if available")
         self.btn_check_update.clicked.connect(self._check_for_update)
         update_row.addWidget(self.btn_check_update)
         self.lbl_update_status = QLabel("")
@@ -1631,6 +1719,7 @@ class MainWindow(QMainWindow):
         about_layout.addWidget(QLabel("Batch rendering tool for Moho Animation v14"))
         donate_row = QHBoxLayout()
         btn_donate = QPushButton("Donate via PayPal")
+        btn_donate.setToolTip("Support the development of Moho Render Farm")
         btn_donate.clicked.connect(lambda: __import__("webbrowser").open(
             "https://www.paypal.me/realidad360"))
         donate_row.addWidget(btn_donate)

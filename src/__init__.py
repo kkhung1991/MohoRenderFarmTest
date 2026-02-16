@@ -1,3 +1,3 @@
 """Moho Render Farm - by Damián Turkieh"""
-__version__ = "1.6.3"
+__version__ = "1.6.4"
 __author__ = "Damián Turkieh"

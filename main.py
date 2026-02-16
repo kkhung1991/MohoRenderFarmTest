@@ -61,6 +61,12 @@ def run_gui(initial_files=None, add_to_queue_files=None):
 
 def main():
     """Main entry point - handles CLI args or launches GUI."""
+    # Apply pending update before anything else
+    from src.updater import has_staged_update, apply_staged_update
+    if has_staged_update():
+        apply_staged_update()
+        sys.exit(0)
+
     import argparse
 
     parser = argparse.ArgumentParser(

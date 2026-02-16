@@ -401,6 +401,10 @@ Render logs are auto-saved to `%APPDATA%\MohoRenderFarm\logs\`.
 
 ## Changelog
 
+### v1.6.4
+- **GUI tooltips and help** - Added descriptive tooltips to all buttons, checkboxes, and input fields across all tabs for easier onboarding of new users
+- **Auto-apply staged updates** - Downloaded updates that were not installed are now automatically applied on the next app startup
+
 ### v1.6.3
 - **Fix farm render output deleted** - Farm jobs with file transfer that used "project folder" output mode had their rendered files deleted during temp cleanup. Output is now redirected to a configurable "Farm Renders Folder" (default: `Renders/` next to the app)
 - **Farm Renders Folder setting** - New App Settings option to configure where farm-rendered files are saved on the slave machine
