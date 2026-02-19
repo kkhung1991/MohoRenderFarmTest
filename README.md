@@ -11,8 +11,9 @@ Created by **Damián Turkieh**
 - **Batch Rendering** - Queue multiple Moho projects with concurrent rendering support
 - **Render Farm** - Master/Slave network system for distributed rendering across multiple PCs, with project file transfer
 - **Submit-Only Slaves** - Slaves can be configured to only submit jobs without rendering, ideal for remote animators
+- **Slave Status Panel** - When running as a slave, the Farm tab shows a real-time status panel with connection, workers, completed/failed jobs, and uptime
 - **Concurrent Rendering** - Configurable max simultaneous renders (local queue and slave mode)
-- **Full GUI** - Dark-themed PyQt6 interface with drag-and-drop support
+- **Full GUI** - Dark-themed PyQt6 interface with drag-and-drop support and descriptive tooltips
 - **CLI Automation** - Complete command-line interface for scripting and pipelines
 - **All Moho Render Options** - Format, codec, frame range, layer comps, antialiasing, multithreading, and more
 - **Queue Management** - Save/load queues, reorder, retry, duplicate jobs
@@ -137,7 +138,8 @@ Set up distributed rendering across multiple PCs:
 6. **Manual assignment**: Right-click a slave to assign a specific job, or right-click a farm job to assign it to a specific slave
 7. **Farm Job Queue table**: Shows all farm jobs with color-coded status (pending/reserved/rendering/completed/failed)
 8. **Connected Slaves table**: Color-coded status (green=idle, blue=rendering, red=offline)
-9. **Farm Log**: Timestamped log of all farm operations with `[MASTER]`/`[SLAVE]`/`[GUI]` prefixes
+9. **Slave Status Panel**: When running as a slave, the "Connected Slaves" panel is replaced with a status panel showing hostname, master server, connection status, render mode, active workers, completed/failed counts, and uptime
+10. **Farm Log**: Timestamped log of all farm operations with `[MASTER]`/`[SLAVE]`/`[GUI]` prefixes
 
 ### App Settings Tab
 - **Moho.exe Path** - Configure the path to Moho.exe (default: `C:\Program Files\Moho 14\Moho.exe`)
@@ -145,6 +147,7 @@ Set up distributed rendering across multiple PCs:
 - **Default Output Folder** - Set a custom default output folder or use project folder as default
 - **Windows Integration** - Register/unregister right-click context menu for .moho files
 - **Shortcuts & Startup** - Add desktop shortcut, Start Menu entry, taskbar pin, and auto-start on Windows boot
+- **Farm Renders Folder** - Configure where farm-rendered files are saved on the slave machine
 - **Updates** - Toggle automatic update checks, manually check for updates
 - **About** - App version, author, and contact info
 
