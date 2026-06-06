@@ -127,6 +127,8 @@ def main():
                         choices=range(6), help="Quality 0-5 (QT only)")
     parser.add_argument("--depth", type=int, default=None,
                         help="Pixel depth (QT only, e.g. 24 or 32)")
+    parser.add_argument("--copy-images", action="store_true",
+                        help="Copy /Images subfolder to project root before render (fix offline media)")
     parser.add_argument("--queue-file", default=None,
                         help="Load and process a saved queue file")
     parser.add_argument("--save-queue", default=None,
@@ -236,6 +238,7 @@ def _run_cli_render(args):
         job.addformatsuffix = _yn_to_bool(args.addformatsuffix)
         job.quality = args.quality
         job.depth = args.depth
+        job.copy_images = args.copy_images
 
         print(f"Rendering: {filepath}")
         result = renderer.render(
