@@ -860,6 +860,16 @@ class MainWindow(QMainWindow):
         self.master_server = None
         self.slave_client = None
 
+        # CRC cache for fast manifest building (avoids re-hashing unchanged files)
+        self._crc_cache = {}
+        self._crc_cache_dirty = False
+        try:
+            _cc = CONFIG_DIR / "manifest_cache.json"
+            if _cc.exists():
+                self._crc_cache = json.loads(_cc.read_text(encoding="utf-8"))
+        except Exception:
+            self._crc_cache = {}
+
         self._setup_ui()
         self._connect_signals()
         self._setup_menu()
@@ -3821,36 +3831,24 @@ class MainWindow(QMainWindow):
     _BUNDLE_MAX_FILES = 200000
     _BUNDLE_MAX_BYTES = 50 * 1024 * 1024 * 1024  # 50 GB (runaway guard, not a normal limit)
 
-    def _prepare_file_bundle(self, job, opts, log):
-        """Create a zip bundle of the project file and optional related media.
-
-        opts: dict with send_files / include_siblings / include_parent / project_root
-        log:  thread-safe logging callback taking one string
-
-        Runs on a worker thread and reports zip progress via `log`. Returns the
-        path to the temporary zip file, or "" on failure.
-        """
-        import zipfile
-        import tempfile
-
+    def _collect_bundle_files(self, job, opts, log):
+        """Decide the bundle root and which files to ship. Returns a dict
+        {root, files:[(Path, relposix, size)], original, placeholders, total,
+        bundle_root} or None on failure (reason logged). Reads no file contents."""
         project_path = Path(job.project_file)
         if not project_path.exists():
             log(f"[GUI] Cannot bundle: file not found: {project_path}")
-            return ""
+            return None
 
-        # Run copy_images BEFORE collecting files
         if job.copy_images:
             from src.moho_renderer import _copy_images_to_root
-            _copy_images_to_root(job, on_output=lambda msg: log(f"[GUI] {msg}"))
-            job.copy_images = False  # Already done; slave won't have Images subfolder
+            _copy_images_to_root(job, on_output=lambda m: log(f"[GUI] {m}"))
+            job.copy_images = False
 
         include_parent = opts.get("include_parent", False)
         include_siblings = opts.get("include_siblings", False)
         selected_root = (opts.get("project_root") or "").strip()
 
-        # Determine the bundle root: a folder shipped recursively with structure
-        # preserved. An explicit "Project root folder" wins; otherwise "Include
-        # parent folder" uses the project's parent's parent.
         bundle_root = None
         if selected_root:
             root_path = Path(selected_root).expanduser()
@@ -3869,87 +3867,112 @@ class MainWindow(QMainWindow):
         if bundle_root is None and include_parent:
             bundle_root = project_path.parent.parent
 
-        fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
-        os.close(fd)
-
-        # Evicted iCloud files exist only as a hidden ".<name>.icloud" stub and
-        # reading a not-yet-downloaded file can fail; collect anything we can't
-        # bundle so we warn instead of silently shipping a broken bundle.
         placeholders = []
 
-        def _is_icloud_stub(p):
+        def _is_stub(p):
             return p.name.startswith(".") and p.name.endswith(".icloud")
 
-        def _stub_real_name(name):
-            return name[1:-len(".icloud")]  # ".Foo.psd.icloud" -> "Foo.psd"
+        def _stub_real(n):
+            return n[1:-len(".icloud")]
 
-        def _add(zf, file_path, arcname):
+        files = []
+        total = 0
+        if bundle_root is not None:
+            root = bundle_root
+            for f in root.rglob("*"):
+                if not f.is_file() or f.is_symlink():
+                    continue
+                rel = f.relative_to(root)
+                if any(part in self._BUNDLE_SKIP for part in rel.parts):
+                    continue
+                if _is_stub(f):
+                    placeholders.append((rel.parent / _stub_real(f.name)).as_posix())
+                    continue
+                try:
+                    sz = f.stat().st_size
+                except OSError:
+                    sz = 0
+                total += sz
+                if len(files) >= self._BUNDLE_MAX_FILES or total > self._BUNDLE_MAX_BYTES:
+                    log(f"[GUI] Send failed: folder too large "
+                        f"({len(files)}+ files / {total / 1024 / 1024:.0f}+ MB). "
+                        f"Pick a smaller project root, or use shared storage instead.")
+                    return None
+                files.append((f, rel.as_posix(), sz))
+            original = project_path.relative_to(root).as_posix()
+        else:
+            root = None
             try:
-                zf.write(str(file_path), arcname)
-                return True
+                sz = project_path.stat().st_size
             except OSError:
-                placeholders.append(arcname)
-                return False
+                sz = 0
+            files.append((project_path, project_path.name, sz))
+            total += sz
+            if include_siblings:
+                for f in project_path.parent.iterdir():
+                    if f.is_dir() or f == project_path or f.name in self._BUNDLE_SKIP:
+                        continue
+                    if _is_stub(f):
+                        placeholders.append(_stub_real(f.name))
+                        continue
+                    try:
+                        sz = f.stat().st_size
+                    except OSError:
+                        sz = 0
+                    files.append((f, f.name, sz))
+                    total += sz
+            original = project_path.name
 
+        if original in placeholders:
+            log(f"[GUI] Send failed: the project file isn't downloaded from iCloud "
+                f"({original}). In Finder, right-click it and choose 'Download Now', then re-send.")
+            return None
+
+        return {"root": root, "files": files, "original": original,
+                "placeholders": placeholders, "total": total, "bundle_root": bundle_root}
+
+    def _warn_placeholders(self, placeholders, log):
+        if placeholders:
+            shown = ", ".join(placeholders[:5]) + (" ..." if len(placeholders) > 5 else "")
+            log(f"[GUI] WARNING: {len(placeholders)} file(s) are not downloaded from iCloud and "
+                f"were skipped ({shown}). Renders may have missing references. In Finder, select "
+                f"the project folder and choose 'Download Now', then re-send.")
+
+    def _prepare_file_bundle(self, job, opts, log):
+        """Zip the project's files into a temp bundle (for uploading to a REMOTE
+        master). Returns the zip path, or "" on failure. Reports progress."""
+        import zipfile
+        import tempfile
+
+        info = self._collect_bundle_files(job, opts, log)
+        if info is None:
+            return ""
+        placeholders = info["placeholders"]
+        total = info["total"]
+
+        fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
+        os.close(fd)
         try:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                if bundle_root is not None:
-                    root = bundle_root
-                    # Pass 1: collect files + total size (for progress and caps)
-                    entries = []
-                    total = 0
-                    for f in root.rglob("*"):
-                        if not f.is_file() or f.is_symlink():
-                            continue
-                        rel = f.relative_to(root)
-                        if any(part in self._BUNDLE_SKIP for part in rel.parts):
-                            continue
-                        if _is_icloud_stub(f):
-                            placeholders.append((rel.parent / _stub_real_name(f.name)).as_posix())
-                            continue
-                        try:
-                            total += f.stat().st_size
-                        except OSError:
-                            pass
-                        if len(entries) >= self._BUNDLE_MAX_FILES or total > self._BUNDLE_MAX_BYTES:
-                            raise ValueError(
-                                f"folder too large to bundle "
-                                f"({len(entries)}+ files / {total / 1024 / 1024:.0f}+ MB). "
-                                f"Pick a smaller project root, or use shared storage instead.")
-                        entries.append((f, rel.as_posix()))
-
-                    # Pass 2: write with progress
-                    log(f"[GUI] Bundling {len(entries)} files "
-                        f"({total / 1024 / 1024:.0f} MB) from '{root.name}'...")
-                    written = 0
-                    last_pct = -10
-                    for f, arc in entries:
-                        if _add(zf, f, arc):
-                            try:
-                                written += f.stat().st_size
-                            except OSError:
-                                pass
-                            if total > 0:
-                                pct = int(written * 100 / total)
-                                if pct >= last_pct + 10:
-                                    last_pct = pct
-                                    log(f"[GUI] Bundling... {pct}% "
-                                        f"({written / 1024 / 1024:.0f}/"
-                                        f"{total / 1024 / 1024:.0f} MB)")
-                    job.farm_original_project = project_path.relative_to(root).as_posix()
-                else:
-                    log("[GUI] Bundling project file...")
-                    _add(zf, project_path, project_path.name)
-                    if include_siblings:
-                        for f in project_path.parent.iterdir():
-                            if f.is_dir() or f == project_path or f.name in self._BUNDLE_SKIP:
-                                continue
-                            if _is_icloud_stub(f):
-                                placeholders.append(_stub_real_name(f.name))
-                                continue
-                            _add(zf, f, f.name)
-                    job.farm_original_project = project_path.name
-        except (OSError, ValueError) as e:
+                scope_name = info["bundle_root"].name if info["bundle_root"] else "project"
+                log(f"[GUI] Bundling {len(info['files'])} files "
+                    f"({total / 1024 / 1024:.0f} MB) from '{scope_name}'...")
+                written = 0
+                last_pct = -10
+                for path, rel, sz in info["files"]:
+                    try:
+                        zf.write(str(path), rel)
+                    except OSError:
+                        placeholders.append(rel)
+                        continue
+                    written += sz
+                    if total > 0:
+                        pct = int(written * 100 / total)
+                        if pct >= last_pct + 10:
+                            last_pct = pct
+                            log(f"[GUI] Bundling... {pct}% "
+                                f"({written / 1024 / 1024:.0f}/{total / 1024 / 1024:.0f} MB)")
+        except OSError as e:
             log(f"[GUI] Bundle failed: {e}")
             try:
                 os.unlink(zip_path)
@@ -3957,11 +3980,9 @@ class MainWindow(QMainWindow):
                 pass
             return ""
 
-        # The project file itself must be in the bundle, or the slave can't render
-        if job.farm_original_project in placeholders:
+        if info["original"] in placeholders:
             log(f"[GUI] Bundle failed: the project file isn't downloaded from iCloud "
-                f"({job.farm_original_project}). In Finder, right-click it and choose "
-                f"'Download Now', then re-send.")
+                f"({info['original']}). In Finder, choose 'Download Now', then re-send.")
             try:
                 os.unlink(zip_path)
             except OSError:
@@ -3969,50 +3990,101 @@ class MainWindow(QMainWindow):
             return ""
 
         job.farm_files_uploaded = True
-
+        job.farm_original_project = info["original"]
+        self._warn_placeholders(placeholders, log)
         size_mb = os.path.getsize(zip_path) / (1024 * 1024)
-        if bundle_root is not None:
-            scope = f"root folder '{bundle_root.name}'"
-        elif include_siblings:
-            scope = "project + folder files"
-        else:
-            scope = "project file"
-        log(f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
-        if placeholders:
-            shown = ", ".join(placeholders[:5]) + (" ..." if len(placeholders) > 5 else "")
-            log(f"[GUI] WARNING: {len(placeholders)} file(s) are not downloaded from iCloud and "
-                f"were skipped ({shown}). Renders may have missing references. In Finder, select "
-                f"the project folder and choose 'Download Now', then re-send.")
+        log(f"[GUI] Prepared file bundle for {job.project_name}: {size_mb:.1f} MB")
         return zip_path
+
+    def _manifest_crc(self, abspath, size, mtime):
+        """CRC32 of a file, cached by (path, size, mtime) so unchanged files are
+        not re-hashed on repeat sends. Returns None if the file can't be read."""
+        c = self._crc_cache.get(abspath)
+        if c and c.get("size") == size and c.get("mtime") == mtime:
+            return c.get("crc")
+        from src.network.slave import _crc32_file
+        crc = _crc32_file(abspath)
+        if crc is None:
+            return None
+        self._crc_cache[abspath] = {"size": size, "mtime": mtime, "crc": crc}
+        self._crc_cache_dirty = True
+        return crc
+
+    def _save_crc_cache(self):
+        if not getattr(self, "_crc_cache_dirty", False):
+            return
+        try:
+            (CONFIG_DIR / "manifest_cache.json").write_text(
+                json.dumps(self._crc_cache), encoding="utf-8")
+            self._crc_cache_dirty = False
+        except Exception:
+            pass
+
+    def _register_file_source_with_master(self, job, opts, log):
+        """Register the project's files with the in-process master so they are
+        served on demand from disk (no zip). Returns True on success."""
+        info = self._collect_bundle_files(job, opts, log)
+        if info is None:
+            return False
+        src_root = str(info["root"]) if info["root"] is not None \
+            else str(Path(job.project_file).parent)
+        log(f"[GUI] Indexing {len(info['files'])} files "
+            f"({info['total'] / 1024 / 1024:.0f} MB) for {job.project_name}...")
+        manifest = []
+        for path, rel, sz in info["files"]:
+            try:
+                mtime = int(path.stat().st_mtime)
+            except OSError:
+                mtime = 0
+            crc = self._manifest_crc(str(path), sz, mtime)
+            if crc is None:
+                info["placeholders"].append(rel)
+                continue
+            manifest.append({"path": rel, "size": sz, "crc": crc})
+        self._save_crc_cache()
+        if info["original"] in info["placeholders"]:
+            log(f"[GUI] Send failed: the project file isn't downloaded from iCloud "
+                f"({info['original']}). In Finder, choose 'Download Now', then re-send.")
+            return False
+        self.master_server.register_file_source(job.id, src_root, manifest)
+        job.farm_files_uploaded = True
+        job.farm_original_project = info["original"]
+        self._warn_placeholders(info["placeholders"], log)
+        log(f"[GUI] Ready: {len(manifest)} files for {job.project_name} "
+            f"served on demand (no zip) — clients fetch only what changed")
+        return True
 
     def _submit_job_to_farm(self, job, opts, log, sync_only=False):
         """Submit a single job to the farm. Returns True on success.
 
         Runs on a worker thread; logs via the thread-safe `log` callback. When
-        files are requested but the bundle fails, the job is NOT submitted (so a
-        slave never renders a project whose files are missing)."""
+        files are requested but they can't be prepared, the job is NOT submitted
+        (so a slave never renders a project whose files are missing)."""
         job.sync_only = sync_only
         want_files = sync_only or opts.get("send_files", False)
-        bundle_path = ""
-        if want_files:
-            bundle_path = self._prepare_file_bundle(job, opts, log)
-            if not bundle_path:
-                log(f"[GUI] NOT sending {job.project_name}: file bundle failed "
-                    f"(see message above) — the job would render with missing files.")
-                return False
 
         if self.master_server:
-            if bundle_path:
-                from src.config import CONFIG_DIR
-                farm_dir = CONFIG_DIR / "farm_files"
-                farm_dir.mkdir(parents=True, exist_ok=True)
-                dest = farm_dir / f"{job.id}.zip"
-                import shutil
-                shutil.move(bundle_path, str(dest))
+            # Files are already local to the master — serve them on demand from
+            # disk (no zip), so repeated sends don't re-bundle the whole project.
+            if want_files:
+                if not self._register_file_source_with_master(job, opts, log):
+                    log(f"[GUI] NOT sending {job.project_name}: couldn't prepare files "
+                        f"(see message above).")
+                    return False
             self.master_server.add_job(job)
             return True
+
         if self.slave_client:
+            # Submitting to a REMOTE master: must upload, so zip the bundle.
+            bundle_path = ""
+            if want_files:
+                bundle_path = self._prepare_file_bundle(job, opts, log)
+                if not bundle_path:
+                    log(f"[GUI] NOT sending {job.project_name}: file bundle failed "
+                        f"(see message above).")
+                    return False
             return bool(self.slave_client.submit_job(job, bundle_path=bundle_path))
+
         log("[GUI] Cannot send to farm: master/slave not running")
         return False
 

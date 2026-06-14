@@ -1,5 +1,6 @@
 """Master server for distributed rendering."""
 import json
+import os
 import threading
 import time
 import socket
@@ -60,6 +61,9 @@ class MasterServer:
         self.active_jobs: Dict[str, RenderJob] = {}  # slave_address -> job
         self.reserved_jobs: Dict[str, RenderJob] = {}  # slave_address -> reserved job
         self.completed_jobs: List[RenderJob] = []  # history of completed/failed jobs
+        # job_id -> {"root": str, "manifest": [{path,size,crc}]} for files served
+        # directly from a local folder (no zip) when submitting on the master.
+        self.file_sources: Dict[str, dict] = {}
         self._cancel_requests: set = set()  # job IDs that slaves should cancel
         self._force_update = False  # When True, heartbeat tells all slaves to update
         self._paused = False  # When True, no new jobs are dispatched to slaves
@@ -331,6 +335,10 @@ class MasterServer:
         @app.route("/api/file_manifest/<job_id>", methods=["GET"])
         def file_manifest(job_id):
             """List files in a job bundle with size + CRC, for incremental sync."""
+            with self._lock:
+                src = self.file_sources.get(job_id)
+            if src is not None:
+                return jsonify({"files": src["manifest"]})
             path = FARM_FILES_DIR / f"{job_id}.zip"
             if not path.exists():
                 return jsonify({"error": "not found"}), 404
@@ -348,8 +356,31 @@ class MasterServer:
         def download_file(job_id):
             """Stream a single file out of a job bundle (for incremental sync)."""
             rel = request.args.get("path", "")
+            if not rel:
+                return jsonify({"error": "not found"}), 404
+
+            # Folder-backed source: serve directly from disk (no zip)
+            with self._lock:
+                src = self.file_sources.get(job_id)
+            if src is not None:
+                root = Path(src["root"]).resolve()
+                target = (root / rel).resolve()
+                if not str(target).startswith(str(root)) or not target.is_file():
+                    return jsonify({"error": "file not in source"}), 404
+
+                def gen_disk():
+                    with open(str(target), "rb") as f:
+                        while True:
+                            chunk = f.read(65536)
+                            if not chunk:
+                                break
+                            yield chunk
+
+                return Response(gen_disk(), mimetype="application/octet-stream",
+                                headers={"Content-Length": str(target.stat().st_size)})
+
             path = FARM_FILES_DIR / f"{job_id}.zip"
-            if not rel or not path.exists():
+            if not path.exists():
                 return jsonify({"error": "not found"}), 404
             try:
                 zf = zipfile.ZipFile(str(path), "r")
@@ -384,8 +415,20 @@ class MasterServer:
                     self.on_output(f"Cleaned up files for job {job_id}")
             return jsonify({"status": "deleted"})
 
+    def register_file_source(self, job_id: str, root: str, manifest: list):
+        """Register a folder-backed file source so the job's files are served
+        directly from disk (no zip). Used when submitting on the master itself."""
+        with self._lock:
+            self.file_sources[job_id] = {"root": root, "manifest": manifest}
+
+    def has_file_source(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self.file_sources
+
     def _cleanup_job_files(self, job_id: str):
-        """Remove uploaded files for a completed job."""
+        """Remove uploaded files / drop the folder source for a completed job."""
+        with self._lock:
+            self.file_sources.pop(job_id, None)
         path = FARM_FILES_DIR / f"{job_id}.zip"
         if path.exists():
             try:
