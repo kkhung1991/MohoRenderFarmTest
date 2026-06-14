@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "farm_project_root": "",
     "auto_reconnect_slave": False,
     "farm_renders_dir": "",
+    "farm_sync_dir": "",
 }
 
 FORMATS = [
