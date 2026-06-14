@@ -290,14 +290,20 @@ class SlaveClient:
 
         # Obtain project files from master if needed
         if job.farm_files_uploaded:
-            # Prefer incremental sync into the persistent client folder; fall
-            # back to a full temp download if sync isn't configured or fails.
+            # Prefer incremental sync into the persistent client folder.
             if self.sync_dir:
-                work_dir = self._sync_files(worker_id, job)
+                work_dir = self._sync_files(worker_id, job,
+                                            Path(self.sync_dir).expanduser(), persistent=True)
                 if work_dir is not None:
                     persistent_workdir = True
+            # No persistent cache: per-file sync into a temp dir (works for
+            # folder-backed jobs that have no zip), else legacy full-zip download.
             if work_dir is None:
-                work_dir = self._download_and_extract_files(worker_id, job)
+                tmp = Path(tempfile.mkdtemp(prefix=f"moho_farm_{job.id}_"))
+                work_dir = self._sync_files(worker_id, job, tmp, persistent=False)
+                if work_dir is None:
+                    shutil.rmtree(str(tmp), ignore_errors=True)
+                    work_dir = self._download_and_extract_files(worker_id, job)
             if work_dir is None:
                 job.status = RenderStatus.FAILED.value
                 job.error_message = "Failed to obtain project files from master"
@@ -398,7 +404,8 @@ class SlaveClient:
 
         synced = False
         if job.farm_files_uploaded and self.sync_dir:
-            synced = self._sync_files(worker_id, job) is not None
+            synced = self._sync_files(worker_id, job,
+                                      Path(self.sync_dir).expanduser(), persistent=True) is not None
 
         if self.on_output:
             if synced:
@@ -524,15 +531,17 @@ class SlaveClient:
             shutil.rmtree(str(work_dir), ignore_errors=True)
             return None
 
-    def _sync_files(self, worker_id: int, job: RenderJob):
-        """Incrementally sync a job's files into the persistent client folder.
+    def _sync_files(self, worker_id: int, job: RenderJob, sync_root, persistent=True):
+        """Incrementally sync a job's files into sync_root using the master's
+        manifest (path/size/CRC): only missing or changed files are downloaded.
 
-        Compares the master's file manifest (path/size/CRC) against what's
-        already in the sync folder and downloads only missing or changed files,
-        keeping a single reusable copy. Returns the sync root (persistent, not
-        deleted after render), or None to fall back to a full temp download.
+        Works for both folder-backed and zip-backed jobs (the master serves a
+        manifest + per-file downloads for both). When persistent is True the
+        folder is treated as a reusable cache (change detection + prune state);
+        otherwise it's a one-shot temp target. Returns sync_root, or None to
+        fall back (e.g. manifest unavailable on an older master).
         """
-        sync_root = Path(self.sync_dir).expanduser()
+        sync_root = Path(sync_root).expanduser()
         try:
             sync_root.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -640,8 +649,10 @@ class SlaveClient:
                                f"(0 MB transferred)")
 
         # Record managed files and optionally prune ones no longer in the project
-        self._update_sync_state(worker_id, sync_root,
-                                set(e["path"] for e in files if e.get("path")))
+        # (only for the persistent cache, not one-shot temp targets).
+        if persistent:
+            self._update_sync_state(worker_id, sync_root,
+                                    set(e["path"] for e in files if e.get("path")))
 
         # Point the job at the synced project file
         original = job.farm_original_project or Path(job.project_file).name
