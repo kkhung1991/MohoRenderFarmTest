@@ -1407,6 +1407,35 @@ class MainWindow(QMainWindow):
             lambda v: self.config.set("farm_send_parent_folder", v))
         mode_layout.addLayout(file_row)
 
+        # Optional explicit project root folder to bundle (preserves structure)
+        root_row = QHBoxLayout()
+        root_row.addWidget(QLabel("Project root folder:"))
+        self.edit_project_root = QLineEdit()
+        self.edit_project_root.setText(self.config.get("farm_project_root", ""))
+        self.edit_project_root.setPlaceholderText(
+            "(optional) bundle this folder + all subfolders, preserving structure")
+        self.edit_project_root.setToolTip(
+            "Optional. When set and the project file is inside this folder, 'Send\n"
+            "project files' bundles this whole folder (with subfolders) and rebuilds\n"
+            "it on the slave, so references anywhere under it resolve. Pick the folder\n"
+            "that contains both your project and its referenced assets.\n"
+            "Overrides 'Include parent folder'. Leave empty to use the checkboxes above.")
+        self.btn_browse_project_root = QPushButton("Browse...")
+        self.btn_browse_project_root.clicked.connect(self._browse_project_root)
+        self.btn_clear_project_root = QPushButton("Clear")
+        self.btn_clear_project_root.clicked.connect(self.edit_project_root.clear)
+        root_row.addWidget(self.edit_project_root, 1)
+        root_row.addWidget(self.btn_browse_project_root)
+        root_row.addWidget(self.btn_clear_project_root)
+        mode_layout.addLayout(root_row)
+
+        self.edit_project_root.textChanged.connect(
+            lambda t: self.config.set("farm_project_root", t))
+        for _w in (self.edit_project_root, self.btn_browse_project_root,
+                   self.btn_clear_project_root):
+            _w.setEnabled(self.chk_send_project_files.isChecked())
+            self.chk_send_project_files.toggled.connect(_w.setEnabled)
+
         # Render enabled option
         render_row = QHBoxLayout()
         self.chk_render_enabled = QCheckBox("Accept render jobs from farm")
@@ -2732,6 +2761,11 @@ class MainWindow(QMainWindow):
         if folder:
             self.edit_farm_renders_dir.setText(folder)
 
+    def _browse_project_root(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Project Root Folder")
+        if folder:
+            self.edit_project_root.setText(folder)
+
     def _browse_default_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Default Output Folder")
         if folder:
@@ -3577,6 +3611,30 @@ class MainWindow(QMainWindow):
         include_parent = self.chk_send_parent_folder.isChecked()
         include_siblings = self.chk_send_sibling_files.isChecked()
 
+        # Determine the bundle root: a folder shipped recursively with structure
+        # preserved. An explicit "Project root folder" wins; otherwise "Include
+        # parent folder" uses the project's parent's parent.
+        bundle_root = None
+        selected_root = self.edit_project_root.text().strip()
+        if selected_root:
+            root_path = Path(selected_root).expanduser()
+            try:
+                project_path.resolve().relative_to(root_path.resolve())
+                in_root = True
+            except ValueError:
+                in_root = False
+            if not root_path.is_dir():
+                self._append_farm_log(
+                    f"[GUI] Project root folder not found: {selected_root} — ignoring it.")
+            elif not in_root:
+                self._append_farm_log(
+                    f"[GUI] Project is not inside the selected root folder "
+                    f"({selected_root}) — ignoring it.")
+            else:
+                bundle_root = root_path
+        if bundle_root is None and include_parent:
+            bundle_root = project_path.parent.parent
+
         fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
         os.close(fd)
 
@@ -3604,8 +3662,8 @@ class MainWindow(QMainWindow):
 
         try:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                if include_parent:
-                    root = project_path.parent.parent
+                if bundle_root is not None:
+                    root = bundle_root
                     count = 0
                     total = 0
                     for f in root.rglob("*"):
@@ -3663,8 +3721,12 @@ class MainWindow(QMainWindow):
         job.farm_files_uploaded = True
 
         size_mb = os.path.getsize(zip_path) / (1024 * 1024)
-        scope = "parent folder tree" if include_parent else (
-            "project + folder files" if include_siblings else "project file")
+        if bundle_root is not None:
+            scope = f"root folder '{bundle_root.name}'"
+        elif include_siblings:
+            scope = "project + folder files"
+        else:
+            scope = "project file"
         self._append_farm_log(
             f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
         if placeholders:
