@@ -1385,13 +1385,26 @@ class MainWindow(QMainWindow):
         self.chk_send_sibling_files.setChecked(self.config.get("farm_send_sibling_files", False))
         self.chk_send_sibling_files.setEnabled(self.chk_send_project_files.isChecked())
         file_row.addWidget(self.chk_send_sibling_files)
+
+        self.chk_send_parent_folder = QCheckBox("Include parent folder (preserve subfolders)")
+        self.chk_send_parent_folder.setToolTip(
+            "Bundle the project's PARENT folder and all subfolders, keeping the\n"
+            "directory structure. Use this when the project links references that\n"
+            "live one directory up (e.g. ../References), so those links resolve\n"
+            "on the slave. Overrides 'Include files from project folder'.")
+        self.chk_send_parent_folder.setChecked(self.config.get("farm_send_parent_folder", False))
+        self.chk_send_parent_folder.setEnabled(self.chk_send_project_files.isChecked())
+        file_row.addWidget(self.chk_send_parent_folder)
         file_row.addStretch()
 
         self.chk_send_project_files.toggled.connect(self.chk_send_sibling_files.setEnabled)
+        self.chk_send_project_files.toggled.connect(self.chk_send_parent_folder.setEnabled)
         self.chk_send_project_files.toggled.connect(
             lambda v: self.config.set("farm_send_project_files", v))
         self.chk_send_sibling_files.toggled.connect(
             lambda v: self.config.set("farm_send_sibling_files", v))
+        self.chk_send_parent_folder.toggled.connect(
+            lambda v: self.config.set("farm_send_parent_folder", v))
         mode_layout.addLayout(file_row)
 
         # Render enabled option
@@ -3453,6 +3466,14 @@ class MainWindow(QMainWindow):
         self._dlg_chk_send_siblings.setEnabled(self._dlg_chk_send_files.isChecked())
         self._dlg_chk_send_files.toggled.connect(self._dlg_chk_send_siblings.setEnabled)
         dlg_layout.addWidget(self._dlg_chk_send_siblings)
+        self._dlg_chk_send_parent = QCheckBox("Include parent folder (preserve subfolders)")
+        self._dlg_chk_send_parent.setToolTip(
+            "Bundle the project's parent folder and subfolders, preserving structure,\n"
+            "so references one directory up (e.g. ../References) resolve on the slave.")
+        self._dlg_chk_send_parent.setChecked(self.chk_send_parent_folder.isChecked())
+        self._dlg_chk_send_parent.setEnabled(self._dlg_chk_send_files.isChecked())
+        self._dlg_chk_send_files.toggled.connect(self._dlg_chk_send_parent.setEnabled)
+        dlg_layout.addWidget(self._dlg_chk_send_parent)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
@@ -3462,6 +3483,7 @@ class MainWindow(QMainWindow):
         # Sync checkboxes back to Farm tab settings
         self.chk_send_project_files.setChecked(self._dlg_chk_send_files.isChecked())
         self.chk_send_sibling_files.setChecked(self._dlg_chk_send_siblings.isChecked())
+        self.chk_send_parent_folder.setChecked(self._dlg_chk_send_parent.isChecked())
         return True
 
     def _send_selected_to_farm(self):
@@ -3520,8 +3542,21 @@ class MainWindow(QMainWindow):
             self.queue.remove_job(job.id)
         self._append_farm_log(f"[GUI] Sent {len(jobs)} job{'s' if len(jobs) > 1 else ''} to farm queue")
 
+    # Files/dirs never worth bundling to the farm
+    _BUNDLE_SKIP = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".svn"}
+    _BUNDLE_MAX_FILES = 5000
+    _BUNDLE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB (master upload limit)
+
     def _prepare_file_bundle(self, job):
-        """Create a zip bundle of the project file and optional siblings.
+        """Create a zip bundle of the project file and optional related media.
+
+        Modes (most inclusive wins):
+        - Include parent folder: zip the project's PARENT directory recursively,
+          preserving structure, so references one level up (../References) and in
+          subfolders resolve on the slave. The project's path relative to that
+          root is stored in farm_original_project.
+        - Include sibling files: project file + flat files in its own folder.
+        - Otherwise: just the project file.
 
         Returns path to the temporary zip file, or "" if nothing to bundle.
         """
@@ -3539,22 +3574,57 @@ class MainWindow(QMainWindow):
             _copy_images_to_root(job, on_output=lambda msg: self._append_farm_log(f"[GUI] {msg}"))
             job.copy_images = False  # Already done; slave won't have Images subfolder
 
+        include_parent = self.chk_send_parent_folder.isChecked()
+        include_siblings = self.chk_send_sibling_files.isChecked()
+
         fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
         os.close(fd)
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(str(project_path), project_path.name)
-            if self.chk_send_sibling_files.isChecked():
-                project_dir = project_path.parent
-                for f in project_dir.iterdir():
-                    if f.is_file() and f != project_path:
-                        zf.write(str(f), f.name)
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                if include_parent:
+                    root = project_path.parent.parent
+                    count = 0
+                    total = 0
+                    for f in root.rglob("*"):
+                        if not f.is_file() or f.is_symlink():
+                            continue
+                        if any(part in self._BUNDLE_SKIP for part in f.relative_to(root).parts):
+                            continue
+                        count += 1
+                        try:
+                            total += f.stat().st_size
+                        except OSError:
+                            pass
+                        if count > self._BUNDLE_MAX_FILES or total > self._BUNDLE_MAX_BYTES:
+                            raise ValueError(
+                                f"parent folder too large to bundle "
+                                f"({count}+ files / {total / 1024 / 1024:.0f}+ MB). "
+                                f"Move references closer to the project or reduce the folder.")
+                        zf.write(str(f), f.relative_to(root).as_posix())
+                    job.farm_original_project = project_path.relative_to(root).as_posix()
+                else:
+                    zf.write(str(project_path), project_path.name)
+                    if include_siblings:
+                        for f in project_path.parent.iterdir():
+                            if f.is_file() and f != project_path and f.name not in self._BUNDLE_SKIP:
+                                zf.write(str(f), f.name)
+                    job.farm_original_project = project_path.name
+        except (OSError, ValueError) as e:
+            self._append_farm_log(f"[GUI] Bundle failed: {e}")
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+            return ""
 
-        job.farm_original_project = project_path.name
         job.farm_files_uploaded = True
 
         size_mb = os.path.getsize(zip_path) / (1024 * 1024)
-        self._append_farm_log(f"[GUI] Prepared file bundle for {job.project_name}: {size_mb:.1f} MB")
+        scope = "parent folder tree" if include_parent else (
+            "project + folder files" if include_siblings else "project file")
+        self._append_farm_log(
+            f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
         return zip_path
 
     def _submit_job_to_farm(self, job):

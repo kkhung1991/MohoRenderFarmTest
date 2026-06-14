@@ -173,6 +173,10 @@ Set up distributed rendering across multiple PCs:
 1. **Master PC**: Click "Start Master" - it will listen for slave connections
 2. **Slave PCs**: Click **Find Master** to auto-detect, or manually enter the master's IP and port, then click "Start Slave"
 3. Add jobs to the local queue, then use **Send to Farm** / **Send All to Farm** to push them to the farm queue
+   - **File transfer options** (when slaves don't share the project files):
+     - *Send project files* — upload the `.moho` file
+     - *Include files from project folder* — also send flat files next to the project (no subfolders)
+     - *Include parent folder (preserve subfolders)* — bundle the project's **parent** folder and all subfolders, keeping structure, so linked references that live one directory up (e.g. `../References`) resolve on the slave. Use this if renders come out with missing/offline references. (Works for **relative** links; absolute paths still need to be made relative in Moho.)
 4. **Any machine can submit jobs** - Use "Add Jobs to Farm" or "Add Folder to Farm" directly from the Farm tab, works from both master and slave machines
 5. Slaves automatically pull and render jobs from the farm queue
 5. **Auto-send** checkbox: new queue jobs go directly to the farm when master is running
