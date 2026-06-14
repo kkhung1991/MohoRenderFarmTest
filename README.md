@@ -75,7 +75,7 @@ launcher creates a small local virtual environment on first run and installs the
 GUI dependencies (PyQt6) automatically. You need:
 
 - **Python 3** — `brew install python` or from [python.org](https://www.python.org/downloads/)
-- **Moho 14** — installed in `/Applications` (e.g. `/Applications/Moho 14/Moho.app`)
+- **Moho 14** — installed in `/Applications` (default: `/Applications/Moho.app`)
 - **FFmpeg** *(optional, only for layer-comp compositing)* — `brew install ffmpeg`,
   or drop an `ffmpeg` binary into the `ffmpeg/` folder
 
@@ -185,7 +185,7 @@ Set up distributed rendering across multiple PCs:
 ### App Settings Tab
 - **Moho Path** - Configure the path to the Moho application
   - Windows default: `C:\Program Files\Moho 14\Moho.exe`
-  - macOS default: `/Applications/Moho 14/Moho.app` (point at the `.app` bundle; the inner CLI binary is resolved automatically)
+  - macOS default: `/Applications/Moho.app` (point at the `.app` bundle; the inner CLI binary is resolved automatically)
 - **Max Simultaneous Renders** - Number of concurrent renders (1-16), applies to both local queue and slave mode
 - **Default Output Folder** - Set a custom default output folder or use project folder as default
 - **Windows Integration** *(Windows only)* - Register/unregister right-click context menu for .moho files

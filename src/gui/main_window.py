@@ -1607,7 +1607,7 @@ class MainWindow(QMainWindow):
         if platform_utils.IS_MACOS:
             moho_label = "Moho App Path:"
             moho_tip = ("Path to Moho.app on this Mac "
-                        "(e.g. /Applications/Moho 14/Moho.app)")
+                        "(e.g. /Applications/Moho.app)")
         elif platform_utils.IS_WINDOWS:
             moho_label = "Moho.exe Path:"
             moho_tip = "Full path to Moho.exe on this machine"
@@ -4134,11 +4134,12 @@ class MainWindow(QMainWindow):
         self._cpu_timer.start(1000)
 
     def _read_cpu_times(self):
-        """Return (idle_ticks, total_ticks) for the whole system, or None.
+        """Return cumulative (idle_ticks, total_ticks) for the whole system.
 
-        Windows uses GetSystemTimes, Linux reads /proc/stat. On other
-        platforms (e.g. macOS) this returns None and the updater falls back
-        to the system load average.
+        Uses GetSystemTimes on Windows, /proc/stat on Linux, and the Mach
+        host_statistics API on macOS. CPU usage is then derived from the
+        delta between two samples (see _update_cpu_usage). Returns None if
+        the platform's counters can't be read.
         """
         from src.utils import platform_utils
 
@@ -4162,6 +4163,9 @@ class MainWindow(QMainWindow):
             # kernel time already includes idle time, so total = kernel + user
             return (idle_val, kernel_val + user_val)
 
+        if platform_utils.IS_MACOS:
+            return self._macos_cpu_times()
+
         if platform_utils.IS_LINUX:
             try:
                 with open("/proc/stat", "r") as f:
@@ -4176,20 +4180,51 @@ class MainWindow(QMainWindow):
 
         return None
 
-    def _update_cpu_usage(self):
-        """Calculate and display current CPU usage (cross-platform)."""
-        current = self._read_cpu_times()
+    def _macos_cpu_times(self):
+        """Read system CPU ticks on macOS via Mach host_statistics.
 
+        Returns (idle_ticks, total_ticks) or None. Equivalent to what tools
+        like `top` use, so the result reflects real CPU usage (not load avg).
+        """
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)  # current process always has libSystem
+
+            HOST_CPU_LOAD_INFO = 3
+            CPU_STATE_MAX = 4
+            CPU_STATE_USER, CPU_STATE_SYSTEM, CPU_STATE_IDLE, CPU_STATE_NICE = 0, 1, 2, 3
+
+            class host_cpu_load_info(ctypes.Structure):
+                _fields_ = [("cpu_ticks", ctypes.c_uint * CPU_STATE_MAX)]
+
+            libc.mach_host_self.restype = ctypes.c_uint
+            libc.host_statistics.argtypes = [
+                ctypes.c_uint, ctypes.c_int,
+                ctypes.POINTER(host_cpu_load_info),
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            libc.host_statistics.restype = ctypes.c_int
+
+            host = libc.mach_host_self()
+            info = host_cpu_load_info()
+            count = ctypes.c_int(CPU_STATE_MAX)
+            kr = libc.host_statistics(host, HOST_CPU_LOAD_INFO,
+                                      ctypes.byref(info), ctypes.byref(count))
+            if kr != 0:
+                return None
+            ticks = info.cpu_ticks
+            idle = ticks[CPU_STATE_IDLE]
+            total = (ticks[CPU_STATE_USER] + ticks[CPU_STATE_SYSTEM]
+                     + ticks[CPU_STATE_IDLE] + ticks[CPU_STATE_NICE])
+            return (idle, total)
+        except Exception:
+            return None
+
+    def _update_cpu_usage(self):
+        """Calculate and display current CPU usage from sample deltas."""
+        current = self._read_cpu_times()
         if current is None:
-            # Fallback (macOS/other): approximate with normalized load average
-            try:
-                load = os.getloadavg()[0]
-                ncpu = os.cpu_count() or 1
-                cpu_pct = max(0.0, min(100.0, load / ncpu * 100.0))
-                self.cpu_progress.setValue(int(cpu_pct))
-            except (OSError, AttributeError):
-                pass
-            return
+            return  # counters unavailable on this platform; leave bar as-is
 
         prev = self._prev_cpu_times
         self._prev_cpu_times = current
