@@ -60,6 +60,7 @@ class RenderJob:
     # Farm file transfer
     farm_files_uploaded: bool = False
     farm_original_project: str = ""
+    sync_only: bool = False  # Pre-warm: sync files to slave without rendering
     # Runtime state
     status: str = RenderStatus.PENDING.value
     progress: float = 0.0

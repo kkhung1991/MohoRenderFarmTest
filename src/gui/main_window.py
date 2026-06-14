@@ -2520,6 +2520,10 @@ class MainWindow(QMainWindow):
             n = len(pending_selected)
             act_farm = menu.addAction(f"Send to Farm ({n} job{'s' if n > 1 else ''})")
             act_farm.triggered.connect(lambda: self._send_jobs_to_farm(pending_selected))
+            act_presync = menu.addAction(f"Pre-sync to Farm — no render ({n} job{'s' if n > 1 else ''})")
+            act_presync.setToolTip("Cache these projects' files on a slave now, so the next "
+                                   "render only transfers what changed (keeps the job in the queue)")
+            act_presync.triggered.connect(lambda: self._presync_jobs_to_farm(pending_selected))
 
         menu.exec(self.queue_table.viewport().mapToGlobal(pos))
 
@@ -3616,6 +3620,24 @@ class MainWindow(QMainWindow):
             self.queue.remove_job(job.id)
         self._append_farm_log(f"[GUI] Sent {len(jobs)} job{'s' if len(jobs) > 1 else ''} to farm queue")
 
+    def _presync_jobs_to_farm(self, jobs):
+        """Pre-warm a slave: ship these jobs' files to be cached without rendering.
+        Leaves the jobs in the local queue and uses fresh job ids."""
+        if not self.master_server and not self.slave_client:
+            return
+        import uuid
+        sent = 0
+        for job in list(jobs):
+            sync_job = RenderJob.from_dict(job.to_dict())
+            sync_job.id = uuid.uuid4().hex[:8]
+            sync_job.status = RenderStatus.PENDING.value
+            self._submit_job_to_farm(sync_job, sync_only=True)
+            sent += 1
+        if sent:
+            self._append_farm_log(
+                f"[GUI] Pre-syncing {sent} project{'s' if sent != 1 else ''} "
+                f"to the farm (no render)")
+
     # Files/dirs never worth bundling to the farm
     _BUNDLE_SKIP = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".svn"}
     _BUNDLE_MAX_FILES = 5000
@@ -3777,11 +3799,20 @@ class MainWindow(QMainWindow):
                 f"the project folder and choose 'Download Now', then re-send.")
         return zip_path
 
-    def _submit_job_to_farm(self, job):
-        """Submit a single job to the farm via master or slave, with optional file upload."""
+    def _submit_job_to_farm(self, job, sync_only=False):
+        """Submit a single job to the farm via master or slave, with optional file upload.
+
+        When sync_only is True the job pre-warms a slave's sync folder (files are
+        shipped, but the slave caches them without rendering)."""
+        job.sync_only = sync_only
         bundle_path = ""
-        if self.chk_send_project_files.isChecked():
+        # Pre-sync requires shipping files; otherwise honor the checkbox.
+        if sync_only or self.chk_send_project_files.isChecked():
             bundle_path = self._prepare_file_bundle(job)
+        if sync_only and not bundle_path:
+            self._append_farm_log("[GUI] Pre-sync skipped: no files to send "
+                                  "(check the project file exists and is downloaded).")
+            return
 
         if self.master_server:
             if bundle_path:
