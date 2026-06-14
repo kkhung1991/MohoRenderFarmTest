@@ -945,7 +945,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._create_settings_tab(), "Render Settings")
         # Tab 3: Render Farm
         self.tabs.addTab(self._create_farm_tab(), "Render Farm")
-        # Tab 4: Settings
+        # Tab 4: Transfers (client file/sync status)
+        self.tabs.addTab(self._create_transfers_tab(), "Transfers")
+        # Tab 5: Settings
         self.tabs.addTab(self._create_app_settings_tab(), "App Settings")
 
         # Status bar
@@ -1651,6 +1653,129 @@ class MainWindow(QMainWindow):
         layout.addWidget(farm_log_group)
 
         return widget
+
+    # --- Transfers tab (client file/sync status, like a sync dashboard) ---
+    def _create_transfers_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        info = QLabel("Live file-transfer and sync status of farm clients "
+                      "(downloads, syncing, rendering, and cached project files).")
+        info.setStyleSheet("color: #a6adc8;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.transfers_table = QTableWidget(0, 7)
+        self.transfers_table.setHorizontalHeaderLabels(
+            ["Client", "Activity", "Progress", "Speed", "Files", "Cached", "Updated"])
+        self.transfers_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.transfers_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.transfers_table.verticalHeader().setVisible(False)
+        hdr = self.transfers_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.transfers_table)
+
+        self.lbl_transfers_summary = QLabel("")
+        self.lbl_transfers_summary.setStyleSheet("color: #a6adc8;")
+        layout.addWidget(self.lbl_transfers_summary)
+
+        self._transfers_tab = widget
+        self._transfers_timer = QTimer()
+        self._transfers_timer.timeout.connect(self._refresh_transfers_table)
+        self._transfers_timer.start(1000)
+        return widget
+
+    def _collect_transfer_rows(self):
+        """Gather one status row per farm client (master view + this slave)."""
+        now = time.time()
+        rows = []
+        if self.master_server:
+            for slave in list(self.master_server.slaves.values()):
+                rows.append(self._format_transfer_row(
+                    slave.hostname, slave, slave.transfer or {}, now))
+        if self.slave_client and getattr(self.slave_client, "last_transfer", None):
+            name = f"{self.slave_client.hostname} (this machine)"
+            rows.append(self._format_transfer_row(
+                name, None, self.slave_client.last_transfer, now))
+        return rows
+
+    @staticmethod
+    def _format_transfer_row(name, slave, t, now):
+        phase = (t.get("phase") or "").lower()
+        if slave is not None and not slave.is_alive:
+            activity = "Offline"
+        else:
+            activity = {
+                "downloading": "Downloading",
+                "syncing": "Syncing",
+                "rendering": "Rendering",
+                "idle": "Idle",
+            }.get(phase, (slave.status.title() if slave else "—"))
+        project = t.get("project") or ""
+        if project and activity in ("Downloading", "Syncing", "Rendering"):
+            activity = f"{activity}: {project}"
+
+        bt = t.get("bytes_total") or 0
+        bd = t.get("bytes_done") or 0
+        if bt > 0:
+            pct = max(0, min(100, int(bd * 100 / bt)))
+            pct_text = f"{bd / 1024 / 1024:.0f} / {bt / 1024 / 1024:.0f} MB"
+        elif phase == "idle":
+            pct, pct_text = 100, "done"
+        else:
+            pct, pct_text = 0, ""
+
+        speed = t.get("speed_bps") or 0
+        speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed > 0 else ""
+        ft = t.get("files_total")
+        fd = t.get("files_done")
+        files_str = f"{fd}/{ft}" if ft else ""
+        cf = t.get("cached_files")
+        cb = t.get("cached_bytes")
+        cached_str = f"{cf} files, {cb / 1024 / 1024:.0f} MB" if cf else ""
+        upd = t.get("updated")
+        updated_str = f"{int(now - upd)}s ago" if upd else ""
+        return {
+            "client": name, "activity": activity, "pct": pct, "pct_text": pct_text,
+            "speed": speed_str, "files": files_str, "cached": cached_str,
+            "updated": updated_str,
+        }
+
+    def _refresh_transfers_table(self):
+        # Only do work when the tab is visible
+        if getattr(self, "_transfers_tab", None) is not None and \
+                self.tabs.currentWidget() is not self._transfers_tab:
+            return
+        rows = self._collect_transfer_rows()
+        tbl = self.transfers_table
+        if tbl.rowCount() != len(rows):
+            tbl.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            tbl.setItem(i, 0, QTableWidgetItem(r["client"]))
+            tbl.setItem(i, 1, QTableWidgetItem(r["activity"]))
+            bar = tbl.cellWidget(i, 2)
+            if not isinstance(bar, QProgressBar):
+                bar = QProgressBar()
+                bar.setTextVisible(True)
+                tbl.setCellWidget(i, 2, bar)
+            bar.setRange(0, 100)
+            bar.setValue(r["pct"])
+            bar.setFormat(r["pct_text"])
+            tbl.setItem(i, 3, QTableWidgetItem(r["speed"]))
+            tbl.setItem(i, 4, QTableWidgetItem(r["files"]))
+            tbl.setItem(i, 5, QTableWidgetItem(r["cached"]))
+            tbl.setItem(i, 6, QTableWidgetItem(r["updated"]))
+
+        if not rows:
+            self.lbl_transfers_summary.setText(
+                "No clients connected. Start the Master (and connect slaves) to monitor transfers.")
+        else:
+            active = sum(1 for r in rows if r["activity"].split(":")[0]
+                         in ("Downloading", "Syncing", "Rendering"))
+            self.lbl_transfers_summary.setText(
+                f"{len(rows)} client(s), {active} active")
 
     def _create_app_settings_tab(self):
         scroll = QScrollArea()
