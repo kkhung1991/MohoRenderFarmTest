@@ -1,8 +1,17 @@
-"""Windows context menu (right-click) integration for Moho files."""
+"""Windows context menu (right-click) integration for Moho files.
+
+This feature is Windows-only (it edits the Windows registry). On macOS and
+Linux the public functions are safe no-ops so the rest of the app can import
+and call them without platform checks.
+"""
 import sys
 import os
-import winreg
 from pathlib import Path
+
+try:
+    import winreg  # Windows only
+except ImportError:  # macOS / Linux
+    winreg = None
 
 
 APP_NAME = "MohoRenderFarm"
@@ -97,6 +106,10 @@ def register_context_menu():
     to avoid overriding the system-level file association with Moho software.
     Uses only existing ProgIDs and SystemFileAssociations.
     """
+    if winreg is None:
+        print("Context menu registration is only supported on Windows.")
+        return False
+
     python = get_python_path()
     app_path = get_app_path()
     extensions = [".moho", ".anime", ".anme"]
@@ -130,6 +143,9 @@ def unregister_context_menu():
     Also cleans up any HKCU extension key overrides left by previous versions
     that may have broken the system-level Moho file association.
     """
+    if winreg is None:
+        return False
+
     extensions = [".moho", ".anime", ".anme"]
 
     for ext in extensions:
@@ -201,6 +217,9 @@ def _delete_key_recursive(root, path):
 
 def is_context_menu_registered():
     """Check if context menu is already registered."""
+    if winreg is None:
+        return False
+
     # Check SystemFileAssociations (primary method)
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,

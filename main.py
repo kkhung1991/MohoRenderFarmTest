@@ -11,10 +11,18 @@ import os
 import socket
 import json
 
-# Add project root and vendored dependencies to path
+# Add project root and vendored dependencies to path.
+# The vendored lib/ holds Windows builds of binary packages (e.g. PyQt6 .pyd),
+# so on Windows it must come first. On macOS/Linux those Windows binaries can't
+# load, so lib/ goes last to let pip-installed packages (PyQt6) take precedence
+# while still providing the pure-Python dependencies as a fallback.
 _app_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_app_root, "lib"))
+_lib_dir = os.path.join(_app_root, "lib")
 sys.path.insert(0, _app_root)
+if os.name == "nt":
+    sys.path.insert(1, _lib_dir)
+else:
+    sys.path.append(_lib_dir)
 
 from src.config import AppConfig
 
@@ -191,10 +199,12 @@ def _run_cli_render(args):
     """Render files from the command line."""
     from src.moho_renderer import RenderJob, MohoRenderer, RenderStatus
 
+    from src.utils import platform_utils
+
     config = AppConfig()
     moho_path = args.moho_path or config.moho_path
 
-    if not os.path.exists(moho_path):
+    if not platform_utils.moho_exists(moho_path):
         print(f"ERROR: Moho executable not found: {moho_path}")
         sys.exit(1)
 
@@ -262,11 +272,12 @@ def _run_cli_render(args):
 def _run_queue_file(args):
     """Process a saved queue file from CLI."""
     from src.render_queue import RenderQueue
+    from src.utils import platform_utils
 
     config = AppConfig()
     moho_path = args.moho_path or config.moho_path
 
-    if not os.path.exists(moho_path):
+    if not platform_utils.moho_exists(moho_path):
         print(f"ERROR: Moho executable not found: {moho_path}")
         sys.exit(1)
 

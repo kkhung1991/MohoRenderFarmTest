@@ -1601,16 +1601,27 @@ class MainWindow(QMainWindow):
         moho_group = QGroupBox("Moho Application")
         moho_layout = QFormLayout(moho_group)
 
+        from src.utils import platform_utils
         self.edit_moho_path = QLineEdit()
         self.edit_moho_path.setText(self.config.moho_path)
-        self.edit_moho_path.setToolTip("Full path to Moho.exe on this machine")
+        if platform_utils.IS_MACOS:
+            moho_label = "Moho App Path:"
+            moho_tip = ("Path to Moho.app on this Mac "
+                        "(e.g. /Applications/Moho 14/Moho.app)")
+        elif platform_utils.IS_WINDOWS:
+            moho_label = "Moho.exe Path:"
+            moho_tip = "Full path to Moho.exe on this machine"
+        else:
+            moho_label = "Moho Path:"
+            moho_tip = "Full path to the Moho executable on this machine"
+        self.edit_moho_path.setToolTip(moho_tip)
         browse_moho = QPushButton("Browse...")
         browse_moho.setFixedWidth(browse_moho.sizeHint().width() + 10)
         browse_moho.clicked.connect(self._browse_moho)
         moho_row = QHBoxLayout()
         moho_row.addWidget(self.edit_moho_path)
         moho_row.addWidget(browse_moho)
-        moho_layout.addRow("Moho.exe Path:", moho_row)
+        moho_layout.addRow(moho_label, moho_row)
 
         layout.addWidget(moho_group)
 
@@ -1678,7 +1689,8 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(farm_render_group)
 
-        # Context menu
+        # Context menu (Windows-only feature: edits the Windows registry)
+        from src.utils import platform_utils
         ctx_group = QGroupBox("Windows Integration")
         ctx_layout = QVBoxLayout(ctx_group)
 
@@ -1701,7 +1713,12 @@ class MainWindow(QMainWindow):
         ctx_btns.addStretch()
         ctx_layout.addLayout(ctx_btns)
 
+        # Always add to the layout (keeps the buttons alive for signal wiring);
+        # right-click registry integration only exists on Windows, so hide it
+        # elsewhere.
         layout.addWidget(ctx_group)
+        if not platform_utils.IS_WINDOWS:
+            ctx_group.hide()
 
         # Shortcuts & Startup
         shortcut_group = QGroupBox("Shortcuts & Startup")
@@ -1726,7 +1743,21 @@ class MainWindow(QMainWindow):
         shortcut_btns.addWidget(self.btn_startup_entry, 0, 3)
         shortcut_layout.addLayout(shortcut_btns)
 
+        # Hide controls that have no equivalent on the current platform.
+        # Start Menu and Taskbar pinning are Windows-only; Desktop shortcut and
+        # "Run on Startup" work on Windows and macOS but not Linux.
+        if not platform_utils.IS_WINDOWS:
+            self.btn_startmenu_shortcut.hide()
+            self.btn_taskbar_shortcut.hide()
+            self.btn_startup_entry.setToolTip("Launch Moho Render Farm automatically when you log in")
+        if platform_utils.IS_LINUX:
+            self.btn_desktop_shortcut.hide()
+            self.btn_startup_entry.hide()
+        # Always add to the layout (keeps buttons alive for signal wiring);
+        # hide the whole group if nothing in it is supported (Linux).
         layout.addWidget(shortcut_group)
+        if not (platform_utils.IS_WINDOWS or platform_utils.IS_MACOS):
+            shortcut_group.hide()
 
         # Updates
         update_group = QGroupBox("Updates")
@@ -2363,8 +2394,9 @@ class MainWindow(QMainWindow):
                 act_edit = menu.addAction(f"Edit Render Settings ({n} job{'s' if n > 1 else ''})")
                 act_edit.triggered.connect(lambda: self._edit_job_settings(render_jobs))
 
-        # Show in Explorer
-        act_show = menu.addAction("Show in Explorer")
+        # Reveal in system file manager
+        from src.utils import platform_utils
+        act_show = menu.addAction(platform_utils.reveal_label())
         act_show.triggered.connect(lambda: self._show_in_explorer(job))
 
         menu.addSeparator()
@@ -2553,21 +2585,12 @@ class MainWindow(QMainWindow):
         self._append_log(f"Added compose job: {Path(folder).name} ({layer_count} layers, {order_label} order)")
 
     def _open_in_explorer(self, filepath):
-        """Open Windows Explorer at the given path."""
-        import subprocess
-        filepath = os.path.normpath(filepath)
-        if os.path.isfile(filepath):
-            subprocess.Popen(['explorer', '/select,', filepath])
-        elif os.path.isdir(filepath):
-            subprocess.Popen(['explorer', filepath])
-        else:
-            # Try parent folder
-            folder = os.path.dirname(filepath)
-            if os.path.exists(folder):
-                subprocess.Popen(['explorer', folder])
+        """Reveal a file/folder in the system file manager (cross-platform)."""
+        from src.utils import platform_utils
+        platform_utils.open_in_file_manager(filepath)
 
     def _show_in_explorer(self, job):
-        """Open Windows Explorer with the project file selected."""
+        """Reveal the project file in the system file manager."""
         self._open_in_explorer(job.project_file)
 
     def _edit_compose_settings(self, jobs):
@@ -2673,9 +2696,18 @@ class MainWindow(QMainWindow):
             self.edit_output_dir.setText(folder)
 
     def _browse_moho(self):
+        from src.utils import platform_utils
+        if platform_utils.IS_MACOS:
+            start_dir = "/Applications"
+            file_filter = "Applications (*.app);;All Files (*)"
+        elif platform_utils.IS_WINDOWS:
+            start_dir = ""
+            file_filter = "Executable (*.exe);;All Files (*)"
+        else:
+            start_dir = ""
+            file_filter = "All Files (*)"
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Select Moho Executable", "",
-            "Executable (*.exe);;All Files (*)"
+            self, "Select Moho Executable", start_dir, file_filter
         )
         if filepath:
             self.edit_moho_path.setText(filepath)
@@ -4092,50 +4124,83 @@ class MainWindow(QMainWindow):
 
     # --- CPU monitor ---
     def _init_cpu_monitor(self):
-        """Initialize CPU usage monitoring using Windows GetSystemTimes."""
-        self._prev_cpu_times = self._get_system_times()
+        """Initialize cross-platform CPU usage monitoring."""
+        try:
+            self._prev_cpu_times = self._read_cpu_times()
+        except Exception:
+            self._prev_cpu_times = None
         self._cpu_timer = QTimer()
         self._cpu_timer.timeout.connect(self._update_cpu_usage)
         self._cpu_timer.start(1000)
 
-    def _get_system_times(self):
-        """Get idle/kernel/user times via Windows API."""
-        import ctypes
-        from ctypes import wintypes
+    def _read_cpu_times(self):
+        """Return (idle_ticks, total_ticks) for the whole system, or None.
 
-        class FILETIME(ctypes.Structure):
-            _fields_ = [("dwLowDateTime", wintypes.DWORD),
-                         ("dwHighDateTime", wintypes.DWORD)]
+        Windows uses GetSystemTimes, Linux reads /proc/stat. On other
+        platforms (e.g. macOS) this returns None and the updater falls back
+        to the system load average.
+        """
+        from src.utils import platform_utils
 
-        idle = FILETIME()
-        kernel = FILETIME()
-        user = FILETIME()
+        if platform_utils.IS_WINDOWS:
+            import ctypes
+            from ctypes import wintypes
 
-        if not ctypes.windll.kernel32.GetSystemTimes(
-                ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
-            return (0, 0, 0)
+            class FILETIME(ctypes.Structure):
+                _fields_ = [("dwLowDateTime", wintypes.DWORD),
+                             ("dwHighDateTime", wintypes.DWORD)]
 
-        idle_val = (idle.dwHighDateTime << 32) | idle.dwLowDateTime
-        kernel_val = (kernel.dwHighDateTime << 32) | kernel.dwLowDateTime
-        user_val = (user.dwHighDateTime << 32) | user.dwLowDateTime
-        return (idle_val, kernel_val, user_val)
+            idle = FILETIME()
+            kernel = FILETIME()
+            user = FILETIME()
+            if not ctypes.windll.kernel32.GetSystemTimes(
+                    ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+            idle_val = (idle.dwHighDateTime << 32) | idle.dwLowDateTime
+            kernel_val = (kernel.dwHighDateTime << 32) | kernel.dwLowDateTime
+            user_val = (user.dwHighDateTime << 32) | user.dwLowDateTime
+            # kernel time already includes idle time, so total = kernel + user
+            return (idle_val, kernel_val + user_val)
+
+        if platform_utils.IS_LINUX:
+            try:
+                with open("/proc/stat", "r") as f:
+                    parts = f.readline().split()
+                if not parts or parts[0] != "cpu":
+                    return None
+                nums = [int(x) for x in parts[1:]]
+                idle = nums[3] + (nums[4] if len(nums) > 4 else 0)  # idle + iowait
+                return (idle, sum(nums))
+            except (OSError, ValueError, IndexError):
+                return None
+
+        return None
 
     def _update_cpu_usage(self):
-        """Calculate and display current CPU usage."""
-        current = self._get_system_times()
+        """Calculate and display current CPU usage (cross-platform)."""
+        current = self._read_cpu_times()
+
+        if current is None:
+            # Fallback (macOS/other): approximate with normalized load average
+            try:
+                load = os.getloadavg()[0]
+                ncpu = os.cpu_count() or 1
+                cpu_pct = max(0.0, min(100.0, load / ncpu * 100.0))
+                self.cpu_progress.setValue(int(cpu_pct))
+            except (OSError, AttributeError):
+                pass
+            return
+
         prev = self._prev_cpu_times
         self._prev_cpu_times = current
+        if prev is None:
+            return
 
         idle_delta = current[0] - prev[0]
-        kernel_delta = current[1] - prev[1]
-        user_delta = current[2] - prev[2]
-
-        # kernel_time includes idle time
-        total = kernel_delta + user_delta
-        if total == 0:
+        total_delta = current[1] - prev[1]
+        if total_delta <= 0:
             return
-        cpu_pct = ((total - idle_delta) / total) * 100.0
-        cpu_pct = max(0.0, min(100.0, cpu_pct))
+        cpu_pct = max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0))
         self.cpu_progress.setValue(int(cpu_pct))
 
     # --- Single-instance IPC server ---

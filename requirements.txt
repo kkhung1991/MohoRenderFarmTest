@@ -1,0 +1,8 @@
+# Python dependencies for Moho Render Farm.
+#
+# On Windows these are vendored in lib/ (no install needed). On macOS/Linux the
+# start.command launcher installs them into a local .venv. PyQt6 is the only
+# strict requirement; requests/Flask are needed for the render-farm networking.
+PyQt6>=6.5
+requests>=2.28
+Flask>=2.2

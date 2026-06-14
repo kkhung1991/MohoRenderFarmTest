@@ -1,17 +1,20 @@
 """FFmpeg-based layer comp compositing for Moho Render Farm."""
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional, Callable
+
+from src.utils import platform_utils
 
 # Image extensions supported for layer comp compositing
 IMAGE_EXTENSIONS = ("*.png", "*.jpg", "*.jpeg", "*.tga", "*.bmp")
 
 
 def get_ffmpeg_path():
-    """Get the path to the bundled ffmpeg executable."""
-    return os.path.join(os.path.dirname(os.path.dirname(__file__)), "ffmpeg", "ffmpeg.exe")
+    """Get the ffmpeg executable: bundled binary if present, else from PATH."""
+    return platform_utils.ffmpeg_path()
 
 
 def _find_image_sequences(folder: Path):
@@ -52,9 +55,11 @@ def compose_layer_comps(output_dir: str, framerate: int = 24,
     if ffmpeg_path is None:
         ffmpeg_path = get_ffmpeg_path()
 
-    if not os.path.exists(ffmpeg_path):
+    # Accept either an on-disk path or a bare command resolvable via PATH
+    if not (os.path.exists(ffmpeg_path) or shutil.which(ffmpeg_path)):
         if on_output:
-            on_output(f"[ffmpeg] ERROR: ffmpeg not found at {ffmpeg_path}")
+            on_output(f"[ffmpeg] ERROR: ffmpeg not found ({ffmpeg_path}). "
+                      f"Install FFmpeg or place it in the app's ffmpeg/ folder.")
         return None
 
     output_path = Path(output_dir)
@@ -188,7 +193,7 @@ def compose_layer_comps(output_dir: str, framerate: int = 24,
             cmd,
             capture_output=True,
             text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            **platform_utils.no_window_kwargs(),
         )
         if result.returncode == 0:
             if on_output:
