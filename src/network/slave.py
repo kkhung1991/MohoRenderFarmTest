@@ -1,4 +1,5 @@
 """Slave client for distributed rendering."""
+import json
 import os
 import shutil
 import socket
@@ -46,6 +47,7 @@ class SlaveClient:
         self.render_enabled = True  # Whether this slave accepts render jobs
         self.farm_renders_dir = ""  # Where farm renders go (empty = default)
         self.sync_dir = ""  # Persistent local folder for incremental file sync (empty = off)
+        self.sync_prune = False  # Delete previously-synced files no longer in the project
 
         # Callbacks
         self.on_connected: Optional[Callable[[], None]] = None
@@ -548,6 +550,10 @@ class SlaveClient:
                 self.on_output(f"Worker {worker_id}: All files already up to date "
                                f"(0 MB transferred)")
 
+        # Record managed files and optionally prune ones no longer in the project
+        self._update_sync_state(worker_id, sync_root,
+                                set(e["path"] for e in files if e.get("path")))
+
         # Point the job at the synced project file
         original = job.farm_original_project or Path(job.project_file).name
         new_project = sync_root / original
@@ -560,6 +566,47 @@ class SlaveClient:
         if self.on_output:
             self.on_output(f"Worker {worker_id}: Using synced project: {new_project}")
         return sync_root
+
+    _SYNC_STATE_FILE = ".moho_sync_state.json"
+
+    def _update_sync_state(self, worker_id: int, sync_root: Path, current_paths: set):
+        """Persist the set of managed files. When pruning is enabled, delete
+        files this slave previously synced that are no longer in the project.
+
+        Only files recorded in our own state file are ever removed, so other
+        contents of the sync folder are never touched.
+        """
+        state_path = sync_root / self._SYNC_STATE_FILE
+        previous = set()
+        try:
+            if state_path.is_file():
+                previous = set(json.loads(state_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            previous = set()
+
+        if self.sync_prune:
+            removed = 0
+            for rel in (previous - current_paths):
+                p = sync_root / rel
+                try:
+                    if p.is_file():
+                        p.unlink()
+                        removed += 1
+                        parent = p.parent
+                        while (parent != sync_root and parent.is_dir()
+                               and not any(parent.iterdir())):
+                            parent.rmdir()
+                            parent = parent.parent
+                except OSError:
+                    pass
+            if removed and self.on_output:
+                self.on_output(f"Worker {worker_id}: Pruned {removed} file(s) "
+                               f"no longer in the project")
+
+        try:
+            state_path.write_text(json.dumps(sorted(current_paths)), encoding="utf-8")
+        except OSError:
+            pass
 
     def _cleanup_work_dir(self, work_dir, job: RenderJob):
         """Clean up temp directory and request master cleanup."""
