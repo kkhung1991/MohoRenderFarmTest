@@ -24,10 +24,11 @@ Created by **Damián Turkieh**
 - **FFmpeg Layer Composition** - Auto-compose layer comp PNG sequences into MP4 after rendering
 - **Project Subfolder Output** - Automatically create subfolders named after each project
 - **Images Copy** - Copy `\Images` media to project root to fix offline media references
-- **Portable Python** - Bundled embeddable Python, no system Python required
+- **Cross-Platform** - Runs on Windows and macOS (Linux for CLI/headless slaves)
+- **Portable Python** - Windows bundles an embeddable Python; macOS/Linux auto-create a local virtual environment on first launch
 - **Auto-save Queue** - Queue is automatically saved on every change and restored on startup
 - **Auto-Update** - Automatic update checking and installation from GitHub
-- **Windows Integration** - Right-click context menu on .moho files to render or add to queue
+- **System Integration** - Windows right-click context menu on .moho files; Desktop shortcut and run-on-startup/login on both Windows and macOS
 - **Drag & Drop** - Drag .moho files directly onto the application window
 - **Edit Queue Settings** - Modify render settings for one or multiple queued jobs simultaneously
 - **Start Selected Jobs** - Start only specific jobs from the queue without starting the entire queue
@@ -54,7 +55,7 @@ Created by **Damián Turkieh**
 
 ## Quick Start
 
-### Installation
+### Windows
 
 **No installation needed!** Everything is bundled in the repository: Python, FFmpeg, and all dependencies.
 
@@ -63,15 +64,55 @@ Created by **Damián Turkieh**
 git clone https://github.com/turkodamian/MohoRenderFarm.git
 cd MohoRenderFarm
 
-# Launch — that's it!
+# Launch — that's it! (double-click or run)
 start.bat
 ```
 
-### Launch
+### macOS
+
+The Windows-only binaries (Python, FFmpeg) are **not** used on macOS. Instead the
+launcher creates a small local virtual environment on first run and installs the
+GUI dependencies (PyQt6) automatically. You need:
+
+- **Python 3** — `brew install python` or from [python.org](https://www.python.org/downloads/)
+- **Moho 14** — installed in `/Applications` (e.g. `/Applications/Moho 14/Moho.app`)
+- **FFmpeg** *(optional, only for layer-comp compositing)* — `brew install ffmpeg`,
+  or drop an `ffmpeg` binary into the `ffmpeg/` folder
 
 ```bash
-# GUI mode (double-click or run)
-start.bat
+# Clone the repository
+git clone https://github.com/turkodamian/MohoRenderFarm.git
+cd MohoRenderFarm
+
+# First launch: creates .venv and installs PyQt6 (one-time, needs internet)
+./start.command
+```
+
+You can also double-click **`start.command`** in Finder. The first time, macOS
+Gatekeeper may ask you to confirm running it (right-click → Open).
+
+In **Settings → Moho Application**, point *Moho App Path* at your `Moho.app`
+bundle (the app resolves the command-line binary inside it automatically).
+
+### Linux (CLI / headless slave)
+
+The GUI works on Linux too (`./start.command` after `pip`-installing PyQt6 system
+dependencies), but Linux is primarily intended for headless render-farm slaves and
+CLI rendering:
+
+```bash
+python3 main.py --slave --master-host <master-ip>
+```
+
+### Launch options
+
+```bash
+# GUI mode
+start.bat              # Windows
+./start.command        # macOS / Linux
+
+# CLI render (any platform)
+python3 main.py --render project.moho -f MP4 -o out.mp4
 ```
 
 ---
@@ -142,11 +183,13 @@ Set up distributed rendering across multiple PCs:
 10. **Farm Log**: Timestamped log of all farm operations with `[MASTER]`/`[SLAVE]`/`[GUI]` prefixes
 
 ### App Settings Tab
-- **Moho.exe Path** - Configure the path to Moho.exe (default: `C:\Program Files\Moho 14\Moho.exe`)
+- **Moho Path** - Configure the path to the Moho application
+  - Windows default: `C:\Program Files\Moho 14\Moho.exe`
+  - macOS default: `/Applications/Moho 14/Moho.app` (point at the `.app` bundle; the inner CLI binary is resolved automatically)
 - **Max Simultaneous Renders** - Number of concurrent renders (1-16), applies to both local queue and slave mode
 - **Default Output Folder** - Set a custom default output folder or use project folder as default
-- **Windows Integration** - Register/unregister right-click context menu for .moho files
-- **Shortcuts & Startup** - Add desktop shortcut, Start Menu entry, taskbar pin, and auto-start on Windows boot
+- **Windows Integration** *(Windows only)* - Register/unregister right-click context menu for .moho files
+- **Shortcuts & Startup** - Add a Desktop shortcut and run-on-startup (Windows + macOS); Start Menu entry and taskbar pin are Windows-only
 - **Farm Renders Folder** - Configure where farm-rendered files are saved on the slave machine
 - **Updates** - Toggle automatic update checks, manually check for updates
 - **About** - App version, author, and contact info
@@ -348,18 +391,20 @@ Master PC (port 5580)
 ```
 MohoRenderFarm/
 ├── main.py                 # Entry point (GUI + CLI)
-├── start.bat               # Quick launcher (double-click to run)
-├── python/                 # Bundled portable Python 3.10
-├── ffmpeg/                 # Bundled FFmpeg binaries
+├── start.bat               # Windows launcher (double-click to run)
+├── start.command           # macOS/Linux launcher (creates .venv on first run)
+├── requirements.txt        # Python dependencies (used on macOS/Linux)
+├── python/                 # Bundled portable Python 3.10 (Windows only)
+├── ffmpeg/                 # Bundled FFmpeg binaries (Windows .exe; optional elsewhere)
 │   ├── ffmpeg.exe          # FFmpeg encoder
 │   └── ffprobe.exe         # FFmpeg probe
-├── lib/                    # Bundled Python dependencies (PyQt6, Flask, etc.)
+├── lib/                    # Bundled Python dependencies (Windows builds of PyQt6, Flask, etc.)
 ├── scripts/
 │   ├── setup_python.py     # Portable Python downloader (for maintenance)
 │   └── setup_ffmpeg.py     # FFmpeg downloader (for maintenance)
 ├── src/
 │   ├── config.py           # App configuration
-│   ├── updater.py          # Auto-update from GitHub
+│   ├── updater.py          # Auto-update from GitHub (cross-platform)
 │   ├── moho_renderer.py    # Moho CLI wrapper engine
 │   ├── render_queue.py     # Queue management
 │   ├── ffmpeg_compose.py   # FFmpeg layer comp compositor
@@ -371,6 +416,8 @@ MohoRenderFarm/
 │   │   ├── master.py       # Render farm master server
 │   │   └── slave.py        # Render farm slave client
 │   └── utils/
+│       ├── platform_utils.py # Cross-platform paths/helpers (Win/macOS/Linux)
+│       ├── shortcuts.py    # Desktop shortcut + startup integration
 │       └── context_menu.py # Windows registry integration
 ├── screenshots/            # GUI screenshots
 └── MohoProjects/           # Test projects (gitignored)
@@ -381,8 +428,9 @@ MohoRenderFarm/
 ## Requirements
 
 - **Moho Pro 14** (or compatible version)
-- **Windows** (tested on Windows 10/11)
-- Everything else is bundled: Python 3.10, FFmpeg, PyQt6, Flask, requests — zero installation needed
+- **Windows** (tested on Windows 10/11) — everything is bundled: Python 3.10, FFmpeg, PyQt6, Flask, requests, zero installation needed
+- **macOS** — requires Python 3 (`brew install python` or python.org); the `start.command` launcher installs PyQt6 into a local `.venv` on first run. FFmpeg is optional (only for layer-comp compositing; `brew install ffmpeg`)
+- **Linux** — supported for CLI rendering and headless render-farm slaves (GUI works with PyQt6 installed)
 
 ---
 

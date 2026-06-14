@@ -10,6 +10,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable
 
+from src.utils import platform_utils
+
 
 class RenderStatus(Enum):
     PENDING = "pending"
@@ -102,7 +104,8 @@ class MohoRenderer:
     """Wraps the Moho CLI for rendering."""
 
     def __init__(self, moho_path: str):
-        self.moho_path = moho_path
+        # Resolve macOS .app bundles to the inner command-line binary
+        self.moho_path = platform_utils.resolve_moho_executable(moho_path)
         self._process: Optional[subprocess.Popen] = None
         self._cancelled = False
 
@@ -217,7 +220,7 @@ class MohoRenderer:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                **platform_utils.no_window_kwargs(),
             )
 
             # Monitor log file for progress only (no display - StreamReader handles that)

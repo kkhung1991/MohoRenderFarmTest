@@ -10,17 +10,20 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Callable
 
+from src.utils import platform_utils
+
 GITHUB_RAW_CONFIG = "https://raw.githubusercontent.com/turkodamian/MohoRenderFarm/main/src/config.py"
 GITHUB_ZIP_URL = "https://github.com/turkodamian/MohoRenderFarm/archive/refs/heads/main.zip"
 APP_ROOT = Path(__file__).parent.parent
 
 # Directories/files to skip when updating
 SKIP_DIRS = {"python", "ffmpeg", "MohoProjects", "__pycache__", ".git", ".claude",
-             "test_output", "output", "renders", "venv", "_update_staging"}
-SKIP_FILES = {".env", "nul", "prompt.txt", "_apply_update.bat"}
+             "test_output", "output", "renders", "venv", ".venv", "_update_staging"}
+SKIP_FILES = {".env", "nul", "prompt.txt", "_apply_update.bat", "_apply_update.sh"}
 
 STAGING_DIR = APP_ROOT / "_update_staging"
-UPDATE_SCRIPT = APP_ROOT / "_apply_update.bat"
+UPDATE_SCRIPT_BAT = APP_ROOT / "_apply_update.bat"
+UPDATE_SCRIPT_SH = APP_ROOT / "_apply_update.sh"
 
 
 def _parse_version(version_str: str):
@@ -140,7 +143,7 @@ def download_and_stage_update(on_progress: Optional[Callable[[str], None]] = Non
             pass
 
 
-def _write_update_script(pid: int):
+def _write_update_script_windows(pid: int):
     """Write a batch script that copies staged files to app root after exit."""
     app_root = str(APP_ROOT)
     staging = str(STAGING_DIR)
@@ -177,32 +180,83 @@ start "" "{python_exe}" "{main_py}"
 :: Delete this script
 (goto) 2>nul & del "%~f0"
 '''
-    with open(str(UPDATE_SCRIPT), "w", encoding="utf-8") as f:
+    with open(str(UPDATE_SCRIPT_BAT), "w", encoding="utf-8") as f:
         f.write(script)
 
 
+def _write_update_script_unix(pid: int):
+    """Write a POSIX shell script that copies staged files after exit (macOS/Linux)."""
+    app_root = str(APP_ROOT)
+    staging = str(STAGING_DIR)
+    # Relaunch with the interpreter that is currently running the app
+    python_exe = sys.executable
+    main_py = str(APP_ROOT / "main.py")
+
+    script = f'''#!/bin/sh
+# Wait for the app process (PID {pid}) to exit (up to ~30 seconds)
+WAITED=0
+while kill -0 {pid} 2>/dev/null; do
+    if [ "$WAITED" -ge 60 ]; then
+        break
+    fi
+    sleep 0.5
+    WAITED=$((WAITED + 1))
+done
+
+# Extra delay for file handles to release
+sleep 1
+
+# Copy staged files into the app root (including dotfiles)
+cp -R "{staging}/." "{app_root}/" 2>/dev/null
+
+# Clean up staging directory
+rm -rf "{staging}" 2>/dev/null
+
+# Relaunch the app, detached
+"{python_exe}" "{main_py}" >/dev/null 2>&1 &
+
+# Delete this script
+rm -- "$0" 2>/dev/null
+'''
+    with open(str(UPDATE_SCRIPT_SH), "w", encoding="utf-8") as f:
+        f.write(script)
+    try:
+        os.chmod(str(UPDATE_SCRIPT_SH), 0o755)
+    except OSError:
+        pass
+
+
 def apply_staged_update():
-    """Launch the update batch script and signal the app should exit.
+    """Launch the platform update script and signal the app should exit.
 
     Returns True if the script was launched.
     """
     if not STAGING_DIR.exists():
         return False
 
-    # Write the script with current process PID so it waits for us
-    _write_update_script(os.getpid())
+    pid = os.getpid()
 
     try:
-        # Launch hidden: use STARTUPINFO to hide the console window
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = 0  # SW_HIDE
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(UPDATE_SCRIPT)],
-            startupinfo=si,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
-        )
+        if platform_utils.IS_WINDOWS:
+            # Write the script with current process PID so it waits for us
+            _write_update_script_windows(pid)
+            # Launch hidden: use STARTUPINFO to hide the console window
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(UPDATE_SCRIPT_BAT)],
+                startupinfo=si,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                close_fds=True,
+            )
+        else:
+            _write_update_script_unix(pid)
+            subprocess.Popen(
+                ["/bin/sh", str(UPDATE_SCRIPT_SH)],
+                start_new_session=True,
+                close_fds=True,
+            )
         return True
     except Exception:
         return False
@@ -220,8 +274,9 @@ def clean_staged_update():
             shutil.rmtree(STAGING_DIR)
     except Exception:
         pass
-    try:
-        if UPDATE_SCRIPT.exists():
-            UPDATE_SCRIPT.unlink()
-    except Exception:
-        pass
+    for script in (UPDATE_SCRIPT_BAT, UPDATE_SCRIPT_SH):
+        try:
+            if script.exists():
+                script.unlink()
+        except Exception:
+            pass

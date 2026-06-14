@@ -10,6 +10,7 @@ build/
 *.egg
 .env
 venv/
+.venv/
 *.log
 output/
 renders/
@@ -20,3 +21,5 @@ prompt.txt
 .claude/
 _update_staging/
 _apply_update.bat
+_apply_update.sh
+.DS_Store

@@ -1,16 +1,17 @@
 """Application configuration management."""
 import json
-import os
 from pathlib import Path
+
+from src.utils import platform_utils
 
 APP_NAME = "Moho Render Farm"
 APP_VERSION = "1.6.6"
 APP_AUTHOR = "Damián Turkieh"
 
-DEFAULT_MOHO_PATH = r"C:\Program Files\Moho 14\Moho.exe"
+DEFAULT_MOHO_PATH = platform_utils.default_moho_path()
 APP_DIR = Path(__file__).parent.parent
 DEFAULT_FARM_RENDERS_DIR = str(APP_DIR / "Renders")
-CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "MohoRenderFarm"
+CONFIG_DIR = platform_utils.config_dir()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 QUEUE_DIR = CONFIG_DIR / "queues"
 PRESETS_DIR = CONFIG_DIR / "presets"
