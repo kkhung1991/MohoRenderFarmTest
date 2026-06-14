@@ -1,8 +1,22 @@
 """Application styles and theme."""
 import os
 
+from src.utils import platform_utils
+
 _STYLE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CHECK_IMAGE_PATH = os.path.join(_STYLE_DIR, "check.svg").replace("\\", "/")
+
+# Lead each font stack with a family that exists on the current platform, so Qt
+# doesn't warn about (and waste time aliasing) missing families like "Segoe UI".
+if platform_utils.IS_MACOS:
+    _UI_FONT = '"Helvetica Neue", "Arial", sans-serif'
+    _MONO_FONT = '"Menlo", "SF Mono", "Monaco", monospace'
+elif platform_utils.IS_WINDOWS:
+    _UI_FONT = '"Segoe UI", "Arial", sans-serif'
+    _MONO_FONT = '"Cascadia Code", "Consolas", monospace'
+else:
+    _UI_FONT = '"Noto Sans", "DejaVu Sans", "Arial", sans-serif'
+    _MONO_FONT = '"DejaVu Sans Mono", "Liberation Mono", monospace'
 
 DARK_THEME = """
 QMainWindow, QDialog {
@@ -260,4 +274,6 @@ QToolTip {
     border: 1px solid #45475a;
     padding: 4px;
 }
-""".replace("__CHECK_IMAGE__", _CHECK_IMAGE_PATH)
+""".replace("__CHECK_IMAGE__", _CHECK_IMAGE_PATH) \
+   .replace('"Segoe UI", Arial, sans-serif', _UI_FONT) \
+   .replace('"Cascadia Code", "Consolas", monospace', _MONO_FONT)
