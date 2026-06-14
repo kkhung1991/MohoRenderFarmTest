@@ -187,13 +187,25 @@ class MohoRenderer:
 
         cmd = self.build_command(job)
 
-        # Ensure output directory exists
+        # Ensure output directory exists. A failure here (e.g. the path points
+        # at another machine's filesystem) must fail the job cleanly rather
+        # than raise an unhandled exception that crashes the calling worker.
         if job.output_path:
-            out_path = Path(job.output_path)
-            if out_path.suffix:  # It's a file path
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-            else:  # It's a directory
-                out_path.mkdir(parents=True, exist_ok=True)
+            try:
+                out_path = Path(job.output_path)
+                if out_path.suffix:  # It's a file path
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                else:  # It's a directory
+                    out_path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                job.status = RenderStatus.FAILED.value
+                job.error_message = f"Cannot create output folder '{job.output_path}': {e}"
+                job.end_time = time.time()
+                if on_output:
+                    on_output(f"[{job.id}] ERROR: {job.error_message}")
+                if on_complete:
+                    on_complete(job)
+                return job
 
         # Create a log file for this job if not specified
         log_path = job.log_file

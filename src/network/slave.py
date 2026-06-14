@@ -258,8 +258,11 @@ class SlaveClient:
                     self.on_job_completed(job)
                 return
 
-        # Redirect output for farm jobs that would render into temp dir
-        if job.farm_files_uploaded and not job.output_path:
+        # Farm jobs with uploaded files render from a temp dir, and the
+        # submitter's output_path points at the SUBMITTER's filesystem
+        # (a different user/host) which isn't writable here. Always redirect
+        # output to this slave's local farm renders folder.
+        if job.farm_files_uploaded:
             from src.config import DEFAULT_FARM_RENDERS_DIR
             renders_dir = self.farm_renders_dir or DEFAULT_FARM_RENDERS_DIR
             name = Path(job.project_file).stem
@@ -267,8 +270,22 @@ class SlaveClient:
                 job.output_path = os.path.join(renders_dir, name)
             else:
                 job.output_path = renders_dir
+            try:
+                os.makedirs(renders_dir, exist_ok=True)
+            except OSError as e:
+                job.status = RenderStatus.FAILED.value
+                job.error_message = f"Cannot create farm renders folder '{renders_dir}': {e}"
+                if self.on_output:
+                    self.on_output(f"Worker {worker_id}: ERROR: {job.error_message}")
+                self._report_completion(job)
+                if work_dir:
+                    self._cleanup_work_dir(work_dir, job)
+                self.completed_jobs.append(job)
+                if self.on_job_completed:
+                    self.on_job_completed(job)
+                return
             if self.on_output:
-                self.on_output(f"Worker {worker_id}: Farm output redirected to {job.output_path}")
+                self.on_output(f"Worker {worker_id}: Farm output -> {job.output_path}")
 
         renderer = MohoRenderer(self.moho_path)
         with self._lock:
