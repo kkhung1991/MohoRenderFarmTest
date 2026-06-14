@@ -76,7 +76,7 @@ class MasterServer:
         self.on_farm_queue_changed: Optional[Callable[[], None]] = None
 
         self._app = Flask(__name__)
-        self._app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2 GB
+        self._app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 * 1024  # 50 GB
         FARM_FILES_DIR.mkdir(parents=True, exist_ok=True)
         self._setup_routes()
 

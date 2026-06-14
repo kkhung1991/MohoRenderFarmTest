@@ -836,6 +836,7 @@ class MainWindow(QMainWindow):
     farm_log_signal = pyqtSignal(str)  # farm-specific log messages
     farm_status_signal = pyqtSignal(str, str)  # text, color for farm status label
     farm_queue_changed_signal = pyqtSignal()  # farm queue needs refresh
+    farm_remove_job_signal = pyqtSignal(str)  # remove a local-queue job after sending
     find_master_signal = pyqtSignal(str)  # found master IP or empty string
     update_check_signal = pyqtSignal(str, bool)  # (version, success)
     slave_force_update_signal = pyqtSignal()  # slave received force update command
@@ -1436,6 +1437,25 @@ class MainWindow(QMainWindow):
             _w.setEnabled(self.chk_send_project_files.isChecked())
             self.chk_send_project_files.toggled.connect(_w.setEnabled)
 
+        # Client sync folder status (this machine's render cache)
+        syncinfo_row = QHBoxLayout()
+        self.lbl_farm_sync_dir = QLabel()
+        self.lbl_farm_sync_dir.setStyleSheet("color: #a6adc8;")
+        self.lbl_farm_sync_dir.setToolTip(
+            "This machine's render-cache folder (set in Settings → Client Sync Folder).\n"
+            "Farm jobs that ship files keep one local copy here; only changed files re-download.")
+        self.btn_open_sync_dir = QPushButton("Open Sync Folder")
+        self.btn_open_sync_dir.setToolTip("Open this machine's Client Sync Folder in the file manager")
+        self.btn_open_sync_dir.clicked.connect(self._open_sync_folder)
+        self.btn_check_sync_dir = QPushButton("Check")
+        self.btn_check_sync_dir.setToolTip("Show how many files / how large the sync folder is")
+        self.btn_check_sync_dir.clicked.connect(self._check_sync_folder)
+        syncinfo_row.addWidget(self.lbl_farm_sync_dir, 1)
+        syncinfo_row.addWidget(self.btn_check_sync_dir)
+        syncinfo_row.addWidget(self.btn_open_sync_dir)
+        mode_layout.addLayout(syncinfo_row)
+        self._refresh_sync_dir_label()
+
         # Render enabled option
         render_row = QHBoxLayout()
         self.chk_render_enabled = QCheckBox("Accept render jobs from farm")
@@ -1750,7 +1770,7 @@ class MainWindow(QMainWindow):
         sync_row.addWidget(browse_sync)
         sync_layout.addRow("Folder:", sync_row)
         self.edit_sync_dir.textChanged.connect(
-            lambda t: self.config.set("farm_sync_dir", t))
+            lambda t: (self.config.set("farm_sync_dir", t), self._refresh_sync_dir_label()))
 
         self.chk_sync_prune = QCheckBox("Mirror exactly (delete files no longer in the project)")
         self.chk_sync_prune.setToolTip(
@@ -1896,6 +1916,7 @@ class MainWindow(QMainWindow):
         self.job_status_signal.connect(self._update_job_status)
         self.ipc_files_signal.connect(self._on_ipc_files)
         self.farm_log_signal.connect(self._append_farm_log)
+        self.farm_remove_job_signal.connect(self._on_farm_remove_job)
         self.farm_status_signal.connect(self._update_farm_status)
         self.farm_queue_changed_signal.connect(self._refresh_farm_queue_table)
         self.find_master_signal.connect(self._on_master_found)
@@ -2179,8 +2200,7 @@ class MainWindow(QMainWindow):
     def _add_file_to_queue(self, filepath):
         job = self._create_job_from_settings(filepath)
         if self.chk_auto_send_farm.isChecked() and (self.master_server or self.slave_client):
-            self._submit_job_to_farm(job)
-            self._append_farm_log(f"[GUI] Auto-sent to farm: {Path(filepath).name}")
+            self._submit_jobs_in_background([job], remove_after=False)
         else:
             self.queue.add_job(job)
             self._append_log(f"Added to queue: {Path(filepath).name}")
@@ -2807,6 +2827,52 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Select Client Sync Folder")
         if folder:
             self.edit_sync_dir.setText(folder)
+
+    def _refresh_sync_dir_label(self):
+        """Update the Farm tab's Client Sync Folder status label from config."""
+        if not hasattr(self, "lbl_farm_sync_dir"):
+            return
+        path = self.config.get("farm_sync_dir", "").strip()
+        if path:
+            self.lbl_farm_sync_dir.setText(f"Client Sync Folder: {path}")
+        else:
+            self.lbl_farm_sync_dir.setText(
+                "Client Sync Folder: not set (set it in Settings to cache farm files locally)")
+
+    def _open_sync_folder(self):
+        from src.utils import platform_utils
+        path = self.config.get("farm_sync_dir", "").strip()
+        if not path:
+            QMessageBox.information(self, "No Sync Folder",
+                                   "Set a Client Sync Folder in Settings first.")
+            return
+        os.makedirs(path, exist_ok=True)
+        platform_utils.open_in_file_manager(path)
+
+    def _check_sync_folder(self):
+        """Report how many files and how much data are in the sync folder."""
+        path = self.config.get("farm_sync_dir", "").strip()
+        if not path:
+            QMessageBox.information(self, "No Sync Folder",
+                                   "Set a Client Sync Folder in Settings first.")
+            return
+        p = Path(path)
+        if not p.is_dir():
+            self._append_farm_log(f"[GUI] Sync folder does not exist yet: {path}")
+            QMessageBox.information(self, "Sync Folder", f"Not created yet:\n{path}")
+            return
+        files = 0
+        total = 0
+        for f in p.rglob("*"):
+            if f.is_file() and not f.name.startswith(".moho_sync"):
+                files += 1
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    pass
+        msg = f"{files} files, {total / 1024 / 1024:.1f} MB cached in {path}"
+        self._append_farm_log(f"[GUI] Sync folder: {msg}")
+        QMessageBox.information(self, "Client Sync Folder", msg)
 
     def _browse_default_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Default Output Folder")
@@ -3584,11 +3650,8 @@ class MainWindow(QMainWindow):
             return
         if not self._show_send_to_farm_dialog(len(pending_jobs)):
             return
-        for job in reversed(pending_jobs):
-            farm_job = RenderJob.from_dict(job.to_dict())
-            self._submit_job_to_farm(farm_job)
-            self.queue.remove_job(job.id)
-        self._append_farm_log(f"[GUI] Sent {len(pending_jobs)} job{'s' if len(pending_jobs) > 1 else ''} to farm queue")
+        farm_jobs = [RenderJob.from_dict(j.to_dict()) for j in pending_jobs]
+        self._submit_jobs_in_background(farm_jobs, remove_after=True)
 
     def _send_all_to_farm(self):
         """Send all pending local queue jobs to the farm."""
@@ -3602,11 +3665,8 @@ class MainWindow(QMainWindow):
             return
         if not self._show_send_to_farm_dialog(len(pending)):
             return
-        for job in list(pending):
-            farm_job = RenderJob.from_dict(job.to_dict())
-            self._submit_job_to_farm(farm_job)
-            self.queue.remove_job(job.id)
-        self._append_farm_log(f"[GUI] Sent {len(pending)} job{'s' if len(pending) > 1 else ''} to farm queue")
+        farm_jobs = [RenderJob.from_dict(j.to_dict()) for j in pending]
+        self._submit_jobs_in_background(farm_jobs, remove_after=True)
 
     def _send_jobs_to_farm(self, jobs):
         """Send specific jobs to the farm (from context menu)."""
@@ -3614,11 +3674,8 @@ class MainWindow(QMainWindow):
             return
         if not self._show_send_to_farm_dialog(len(jobs)):
             return
-        for job in list(jobs):
-            farm_job = RenderJob.from_dict(job.to_dict())
-            self._submit_job_to_farm(farm_job)
-            self.queue.remove_job(job.id)
-        self._append_farm_log(f"[GUI] Sent {len(jobs)} job{'s' if len(jobs) > 1 else ''} to farm queue")
+        farm_jobs = [RenderJob.from_dict(j.to_dict()) for j in jobs]
+        self._submit_jobs_in_background(farm_jobs, remove_after=True)
 
     def _presync_jobs_to_farm(self, jobs):
         """Pre-warm a slave: ship these jobs' files to be cached without rendering.
@@ -3626,58 +3683,50 @@ class MainWindow(QMainWindow):
         if not self.master_server and not self.slave_client:
             return
         import uuid
-        sent = 0
+        sync_jobs = []
         for job in list(jobs):
             sync_job = RenderJob.from_dict(job.to_dict())
             sync_job.id = uuid.uuid4().hex[:8]
             sync_job.status = RenderStatus.PENDING.value
-            self._submit_job_to_farm(sync_job, sync_only=True)
-            sent += 1
-        if sent:
-            self._append_farm_log(
-                f"[GUI] Pre-syncing {sent} project{'s' if sent != 1 else ''} "
-                f"to the farm (no render)")
+            sync_jobs.append(sync_job)
+        self._submit_jobs_in_background(sync_jobs, sync_only=True, remove_after=False)
 
     # Files/dirs never worth bundling to the farm
     _BUNDLE_SKIP = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".svn"}
-    _BUNDLE_MAX_FILES = 5000
-    _BUNDLE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB (master upload limit)
+    _BUNDLE_MAX_FILES = 200000
+    _BUNDLE_MAX_BYTES = 50 * 1024 * 1024 * 1024  # 50 GB (runaway guard, not a normal limit)
 
-    def _prepare_file_bundle(self, job):
+    def _prepare_file_bundle(self, job, opts, log):
         """Create a zip bundle of the project file and optional related media.
 
-        Modes (most inclusive wins):
-        - Include parent folder: zip the project's PARENT directory recursively,
-          preserving structure, so references one level up (../References) and in
-          subfolders resolve on the slave. The project's path relative to that
-          root is stored in farm_original_project.
-        - Include sibling files: project file + flat files in its own folder.
-        - Otherwise: just the project file.
+        opts: dict with send_files / include_siblings / include_parent / project_root
+        log:  thread-safe logging callback taking one string
 
-        Returns path to the temporary zip file, or "" if nothing to bundle.
+        Runs on a worker thread and reports zip progress via `log`. Returns the
+        path to the temporary zip file, or "" on failure.
         """
         import zipfile
         import tempfile
 
         project_path = Path(job.project_file)
         if not project_path.exists():
-            self._append_farm_log(f"[GUI] Cannot bundle: file not found: {project_path}")
+            log(f"[GUI] Cannot bundle: file not found: {project_path}")
             return ""
 
         # Run copy_images BEFORE collecting files
         if job.copy_images:
             from src.moho_renderer import _copy_images_to_root
-            _copy_images_to_root(job, on_output=lambda msg: self._append_farm_log(f"[GUI] {msg}"))
+            _copy_images_to_root(job, on_output=lambda msg: log(f"[GUI] {msg}"))
             job.copy_images = False  # Already done; slave won't have Images subfolder
 
-        include_parent = self.chk_send_parent_folder.isChecked()
-        include_siblings = self.chk_send_sibling_files.isChecked()
+        include_parent = opts.get("include_parent", False)
+        include_siblings = opts.get("include_siblings", False)
+        selected_root = (opts.get("project_root") or "").strip()
 
         # Determine the bundle root: a folder shipped recursively with structure
         # preserved. An explicit "Project root folder" wins; otherwise "Include
         # parent folder" uses the project's parent's parent.
         bundle_root = None
-        selected_root = self.edit_project_root.text().strip()
         if selected_root:
             root_path = Path(selected_root).expanduser()
             try:
@@ -3686,11 +3735,9 @@ class MainWindow(QMainWindow):
             except ValueError:
                 in_root = False
             if not root_path.is_dir():
-                self._append_farm_log(
-                    f"[GUI] Project root folder not found: {selected_root} — ignoring it.")
+                log(f"[GUI] Project root folder not found: {selected_root} — ignoring it.")
             elif not in_root:
-                self._append_farm_log(
-                    f"[GUI] Project is not inside the selected root folder "
+                log(f"[GUI] Project is not inside the selected root folder "
                     f"({selected_root}) — ignoring it.")
             else:
                 bundle_root = root_path
@@ -3700,10 +3747,9 @@ class MainWindow(QMainWindow):
         fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
         os.close(fd)
 
-        # iCloud (and similar) files that aren't downloaded locally. Evicted
-        # iCloud files show on disk only as a hidden ".<name>.icloud" stub, and
+        # Evicted iCloud files exist only as a hidden ".<name>.icloud" stub and
         # reading a not-yet-downloaded file can fail; collect anything we can't
-        # bundle so we can warn instead of silently shipping a broken bundle.
+        # bundle so we warn instead of silently shipping a broken bundle.
         placeholders = []
 
         def _is_icloud_stub(p):
@@ -3713,8 +3759,6 @@ class MainWindow(QMainWindow):
             return name[1:-len(".icloud")]  # ".Foo.psd.icloud" -> "Foo.psd"
 
         def _add(zf, file_path, arcname):
-            """Write a file to the zip. Records and returns False if it can't be
-            read (e.g. an evicted iCloud file with no local copy)."""
             try:
                 zf.write(str(file_path), arcname)
                 return True
@@ -3726,7 +3770,8 @@ class MainWindow(QMainWindow):
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 if bundle_root is not None:
                     root = bundle_root
-                    count = 0
+                    # Pass 1: collect files + total size (for progress and caps)
+                    entries = []
                     total = 0
                     for f in root.rglob("*"):
                         if not f.is_file() or f.is_symlink():
@@ -3737,19 +3782,38 @@ class MainWindow(QMainWindow):
                         if _is_icloud_stub(f):
                             placeholders.append((rel.parent / _stub_real_name(f.name)).as_posix())
                             continue
-                        count += 1
                         try:
                             total += f.stat().st_size
                         except OSError:
                             pass
-                        if count > self._BUNDLE_MAX_FILES or total > self._BUNDLE_MAX_BYTES:
+                        if len(entries) >= self._BUNDLE_MAX_FILES or total > self._BUNDLE_MAX_BYTES:
                             raise ValueError(
-                                f"parent folder too large to bundle "
-                                f"({count}+ files / {total / 1024 / 1024:.0f}+ MB). "
-                                f"Move references closer to the project or reduce the folder.")
-                        _add(zf, f, rel.as_posix())
+                                f"folder too large to bundle "
+                                f"({len(entries)}+ files / {total / 1024 / 1024:.0f}+ MB). "
+                                f"Pick a smaller project root, or use shared storage instead.")
+                        entries.append((f, rel.as_posix()))
+
+                    # Pass 2: write with progress
+                    log(f"[GUI] Bundling {len(entries)} files "
+                        f"({total / 1024 / 1024:.0f} MB) from '{root.name}'...")
+                    written = 0
+                    last_pct = -10
+                    for f, arc in entries:
+                        if _add(zf, f, arc):
+                            try:
+                                written += f.stat().st_size
+                            except OSError:
+                                pass
+                            if total > 0:
+                                pct = int(written * 100 / total)
+                                if pct >= last_pct + 10:
+                                    last_pct = pct
+                                    log(f"[GUI] Bundling... {pct}% "
+                                        f"({written / 1024 / 1024:.0f}/"
+                                        f"{total / 1024 / 1024:.0f} MB)")
                     job.farm_original_project = project_path.relative_to(root).as_posix()
                 else:
+                    log("[GUI] Bundling project file...")
                     _add(zf, project_path, project_path.name)
                     if include_siblings:
                         for f in project_path.parent.iterdir():
@@ -3761,7 +3825,7 @@ class MainWindow(QMainWindow):
                             _add(zf, f, f.name)
                     job.farm_original_project = project_path.name
         except (OSError, ValueError) as e:
-            self._append_farm_log(f"[GUI] Bundle failed: {e}")
+            log(f"[GUI] Bundle failed: {e}")
             try:
                 os.unlink(zip_path)
             except OSError:
@@ -3770,8 +3834,7 @@ class MainWindow(QMainWindow):
 
         # The project file itself must be in the bundle, or the slave can't render
         if job.farm_original_project in placeholders:
-            self._append_farm_log(
-                f"[GUI] Bundle failed: the project file isn't downloaded from iCloud "
+            log(f"[GUI] Bundle failed: the project file isn't downloaded from iCloud "
                 f"({job.farm_original_project}). In Finder, right-click it and choose "
                 f"'Download Now', then re-send.")
             try:
@@ -3789,30 +3852,29 @@ class MainWindow(QMainWindow):
             scope = "project + folder files"
         else:
             scope = "project file"
-        self._append_farm_log(
-            f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
+        log(f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
         if placeholders:
             shown = ", ".join(placeholders[:5]) + (" ..." if len(placeholders) > 5 else "")
-            self._append_farm_log(
-                f"[GUI] WARNING: {len(placeholders)} file(s) are not downloaded from iCloud and "
+            log(f"[GUI] WARNING: {len(placeholders)} file(s) are not downloaded from iCloud and "
                 f"were skipped ({shown}). Renders may have missing references. In Finder, select "
                 f"the project folder and choose 'Download Now', then re-send.")
         return zip_path
 
-    def _submit_job_to_farm(self, job, sync_only=False):
-        """Submit a single job to the farm via master or slave, with optional file upload.
+    def _submit_job_to_farm(self, job, opts, log, sync_only=False):
+        """Submit a single job to the farm. Returns True on success.
 
-        When sync_only is True the job pre-warms a slave's sync folder (files are
-        shipped, but the slave caches them without rendering)."""
+        Runs on a worker thread; logs via the thread-safe `log` callback. When
+        files are requested but the bundle fails, the job is NOT submitted (so a
+        slave never renders a project whose files are missing)."""
         job.sync_only = sync_only
+        want_files = sync_only or opts.get("send_files", False)
         bundle_path = ""
-        # Pre-sync requires shipping files; otherwise honor the checkbox.
-        if sync_only or self.chk_send_project_files.isChecked():
-            bundle_path = self._prepare_file_bundle(job)
-        if sync_only and not bundle_path:
-            self._append_farm_log("[GUI] Pre-sync skipped: no files to send "
-                                  "(check the project file exists and is downloaded).")
-            return
+        if want_files:
+            bundle_path = self._prepare_file_bundle(job, opts, log)
+            if not bundle_path:
+                log(f"[GUI] NOT sending {job.project_name}: file bundle failed "
+                    f"(see message above) — the job would render with missing files.")
+                return False
 
         if self.master_server:
             if bundle_path:
@@ -3823,8 +3885,49 @@ class MainWindow(QMainWindow):
                 import shutil
                 shutil.move(bundle_path, str(dest))
             self.master_server.add_job(job)
-        elif self.slave_client:
-            self.slave_client.submit_job(job, bundle_path=bundle_path)
+            return True
+        if self.slave_client:
+            return bool(self.slave_client.submit_job(job, bundle_path=bundle_path))
+        log("[GUI] Cannot send to farm: master/slave not running")
+        return False
+
+    def _submit_jobs_in_background(self, jobs, sync_only=False, remove_after=False):
+        """Bundle + submit jobs to the farm on a worker thread so the UI stays
+        responsive, logging progress to the Farm Log. When remove_after is True,
+        successfully-sent jobs are removed from the local queue."""
+        if not jobs:
+            return
+        # Capture bundle options on the GUI thread (widget access must not happen
+        # off-thread).
+        opts = {
+            "send_files": self.chk_send_project_files.isChecked(),
+            "include_siblings": self.chk_send_sibling_files.isChecked(),
+            "include_parent": self.chk_send_parent_folder.isChecked(),
+            "project_root": self.edit_project_root.text().strip(),
+        }
+        log = self.farm_log_signal.emit
+        n = len(jobs)
+        log(f"[GUI] {'Pre-syncing' if sync_only else 'Sending'} {n} "
+            f"job{'s' if n != 1 else ''} to the farm...")
+
+        def worker():
+            ok = 0
+            for job in jobs:
+                try:
+                    if self._submit_job_to_farm(job, opts, log, sync_only=sync_only):
+                        ok += 1
+                        if remove_after:
+                            self.farm_remove_job_signal.emit(job.id)
+                except Exception as e:
+                    log(f"[GUI] Error sending {getattr(job, 'project_name', 'job')}: {e}")
+            log(f"[GUI] {'Pre-synced' if sync_only else 'Sent'} {ok}/{n} "
+                f"job{'s' if n != 1 else ''} to the farm")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_farm_remove_job(self, job_id):
+        """Remove a job from the local queue (called after a successful send)."""
+        self.queue.remove_job(job_id)
 
     def _add_jobs_to_farm(self):
         """Open file dialog and submit selected .moho files directly to the farm."""
@@ -3836,12 +3939,13 @@ class MainWindow(QMainWindow):
             self, "Select Moho Projects for Farm", "",
             "Moho Projects (*.moho *.anime *.anme);;All Files (*)"
         )
+        if not files:
+            return
+        jobs = []
         for f in files:
-            job = self._create_job_from_settings(f)
-            self._submit_job_to_farm(job)
+            jobs.append(self._create_job_from_settings(f))
             self.config.add_recent_project(f)
-        if files:
-            self._append_farm_log(f"[GUI] Added {len(files)} job{'s' if len(files) > 1 else ''} to farm queue")
+        self._submit_jobs_in_background(jobs, remove_after=False)
 
     def _add_folder_to_farm(self):
         """Open folder dialog and submit all .moho files to the farm."""
@@ -3851,20 +3955,18 @@ class MainWindow(QMainWindow):
             return
         folder = QFileDialog.getExistingDirectory(self, "Select Folder with Moho Projects for Farm")
         if folder:
-            count = 0
+            jobs = []
             for root, dirs, files_list in os.walk(folder):
                 for f in files_list:
                     ext = Path(f).suffix.lower()
                     if ext in MOHO_FILE_EXTENSIONS:
                         filepath = os.path.join(root, f)
-                        job = self._create_job_from_settings(filepath)
-                        self._submit_job_to_farm(job)
+                        jobs.append(self._create_job_from_settings(filepath))
                         self.config.add_recent_project(filepath)
-                        count += 1
-            if count == 0:
+            if not jobs:
                 QMessageBox.information(self, "No Projects", "No Moho project files found in the selected folder.")
             else:
-                self._append_farm_log(f"[GUI] Added {count} job{'s' if count > 1 else ''} to farm queue from folder")
+                self._submit_jobs_in_background(jobs, remove_after=False)
 
     # --- Farm: Context Menus ---
     def _show_slave_context_menu(self, pos):
