@@ -25,6 +25,7 @@ class SlaveInfo:
         self.jobs_completed = 0
         self.jobs_failed = 0
         self.render_enabled = True  # Whether this slave accepts render jobs
+        self.transfer = {}  # Latest file-transfer/sync status reported by the slave
 
     @property
     def address(self):
@@ -45,6 +46,7 @@ class SlaveInfo:
             "jobs_completed": self.jobs_completed,
             "jobs_failed": self.jobs_failed,
             "render_enabled": self.render_enabled,
+            "transfer": self.transfer,
         }
 
 
@@ -146,6 +148,21 @@ class MasterServer:
                 "cancel_jobs": cancel_ids,
                 "force_update": self._force_update,
             })
+
+        @app.route("/api/transfer_progress", methods=["POST"])
+        def transfer_progress():
+            """Receive a slave's current file-transfer / sync status."""
+            data = request.json or {}
+            ip = request.remote_addr
+            port = data.get("port", 0)
+            key = f"{ip}:{port}"
+            with self._lock:
+                if key in self.slaves:
+                    t = {k: v for k, v in data.items() if k != "port"}
+                    t["updated"] = time.time()
+                    self.slaves[key].transfer = t
+                    self.slaves[key].last_heartbeat = time.time()
+            return jsonify({"status": "ok"})
 
         @app.route("/api/get_job", methods=["GET"])
         def get_job():

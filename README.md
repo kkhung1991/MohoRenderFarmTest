@@ -12,6 +12,8 @@ Created by **Damián Turkieh**
 - **Render Farm** - Master/Slave network system for distributed rendering across multiple PCs, with project file transfer
 - **Submit-Only Slaves** - Slaves can be configured to only submit jobs without rendering, ideal for remote animators
 - **Slave Status Panel** - When running as a slave, the Farm tab shows a real-time status panel with connection, workers, completed/failed jobs, and uptime
+- **Transfers Tab** - Master-side dashboard showing each client's live file-transfer/sync status: activity (downloading/syncing/rendering), a progress bar, network speed, file counts, and how much project data is cached locally
+- **Incremental Client Sync** - Optional per-client sync folder that keeps one local copy of project files and only re-downloads what changed (compared by size + CRC), with an opt-in "mirror exactly" prune and a no-render "Pre-sync to Farm" pre-warm
 - **Concurrent Rendering** - Configurable max simultaneous renders (local queue and slave mode)
 - **Full GUI** - Dark-themed PyQt6 interface with drag-and-drop support and descriptive tooltips
 - **CLI Automation** - Complete command-line interface for scripting and pipelines

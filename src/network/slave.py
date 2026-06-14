@@ -48,6 +48,8 @@ class SlaveClient:
         self.farm_renders_dir = ""  # Where farm renders go (empty = default)
         self.sync_dir = ""  # Persistent local folder for incremental file sync (empty = off)
         self.sync_prune = False  # Delete previously-synced files no longer in the project
+        self.last_transfer = {}  # Latest transfer/sync status (for local display)
+        self._last_transfer_report = 0.0
 
         # Callbacks
         self.on_connected: Optional[Callable[[], None]] = None
@@ -258,6 +260,24 @@ class SlaveClient:
                     self.on_output(f"Worker {worker_id} error: {e}")
                 time.sleep(5)
 
+    def _report_transfer(self, force=False, min_interval=1.0, **fields):
+        """Report this slave's transfer/sync status to the master (throttled,
+        best-effort) and cache it locally for display."""
+        now = time.time()
+        if not force and (now - self._last_transfer_report) < min_interval:
+            return
+        self._last_transfer_report = now
+        cached = dict(fields)
+        cached["updated"] = now
+        self.last_transfer = cached
+        try:
+            payload = {"port": self.slave_port}
+            payload.update(fields)
+            requests.post(f"{self.master_url}/api/transfer_progress",
+                          json=payload, timeout=3)
+        except Exception:
+            pass
+
     def _process_job(self, worker_id: int, job: RenderJob):
         """Process a single render job."""
         # Pre-warm / sync-only job: cache files locally, don't render
@@ -329,10 +349,12 @@ class SlaveClient:
                 count = len(self._active_renders)
             self.on_status_changed(f"rendering ({count} active)")
 
+        self._report_transfer(force=True, phase="rendering", project=job.project_name)
         renderer.render(
             job,
             on_output=self.on_output,
         )
+        self._report_transfer(force=True, phase="idle", project=job.project_name)
 
         with self._lock:
             self._active_renders.pop(worker_id, None)
@@ -449,10 +471,19 @@ class SlaveClient:
             total = int(resp.headers.get("Content-Length", 0))
             done = 0
             last_pct = -10
+            start = time.time()
+            self._report_transfer(force=True, phase="downloading", project=job.project_name,
+                                  files_total=1, files_done=0,
+                                  bytes_total=total, bytes_done=0, speed_bps=0)
             with open(str(zip_path), "wb") as f:
                 for chunk in resp.iter_content(chunk_size=65536):
                     f.write(chunk)
                     done += len(chunk)
+                    elapsed = time.time() - start
+                    speed = done / elapsed if elapsed > 0 else 0
+                    self._report_transfer(phase="downloading", project=job.project_name,
+                                          files_total=1, files_done=0,
+                                          bytes_total=total, bytes_done=done, speed_bps=speed)
                     if total > 0 and self.on_output:
                         pct = int(done * 100 / total)
                         if pct >= last_pct + 10:
@@ -460,6 +491,8 @@ class SlaveClient:
                             self.on_output(
                                 f"Worker {worker_id}: Downloading... {pct}% "
                                 f"({done / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB)")
+            self._report_transfer(force=True, phase="idle", project=job.project_name,
+                                  bytes_total=total, bytes_done=done, speed_bps=0)
 
             size_mb = zip_path.stat().st_size / (1024 * 1024)
             if self.on_output:
@@ -545,8 +578,14 @@ class SlaveClient:
                            f"{len(to_download)} to update, {reused} reused")
 
         total_bytes = sum(e.get("size", 0) for e in to_download)
+        cached_bytes_total = sum(e.get("size", 0) for e in files)
         done_bytes = 0
+        files_done = reused
         last_pct = -10
+        start = time.time()
+        self._report_transfer(force=True, phase="syncing", project=job.project_name,
+                              files_total=len(files), files_done=files_done,
+                              bytes_total=total_bytes, bytes_done=0, speed_bps=0)
         for entry in to_download:
             rel = entry["path"]
             target = sync_root / rel
@@ -564,6 +603,12 @@ class SlaveClient:
                     for chunk in r.iter_content(chunk_size=65536):
                         f.write(chunk)
                         done_bytes += len(chunk)
+                        elapsed = time.time() - start
+                        speed = done_bytes / elapsed if elapsed > 0 else 0
+                        self._report_transfer(phase="syncing", project=job.project_name,
+                                              files_total=len(files), files_done=files_done,
+                                              bytes_total=total_bytes, bytes_done=done_bytes,
+                                              speed_bps=speed)
                         if total_bytes > 0 and self.on_output:
                             pct = int(done_bytes * 100 / total_bytes)
                             if pct >= last_pct + 10:
@@ -573,10 +618,18 @@ class SlaveClient:
                                     f"({done_bytes / 1024 / 1024:.1f}/"
                                     f"{total_bytes / 1024 / 1024:.1f} MB)")
                 os.replace(str(tmp), str(target))
+                files_done += 1
             except Exception as e:
                 if self.on_output:
                     self.on_output(f"Worker {worker_id}: Sync error for {rel}: {e}")
                 return None
+
+        elapsed = time.time() - start
+        self._report_transfer(force=True, phase="idle", project=job.project_name,
+                              files_total=len(files), files_done=len(files),
+                              bytes_total=total_bytes, bytes_done=done_bytes,
+                              speed_bps=(done_bytes / elapsed if elapsed > 0 else 0),
+                              cached_files=len(files), cached_bytes=cached_bytes_total)
 
         if self.on_output:
             if to_download:
