@@ -260,6 +260,11 @@ class SlaveClient:
 
     def _process_job(self, worker_id: int, job: RenderJob):
         """Process a single render job."""
+        # Pre-warm / sync-only job: cache files locally, don't render
+        if job.sync_only:
+            self._process_sync_only(worker_id, job)
+            return
+
         work_dir = None
         persistent_workdir = False  # True when work_dir is the reusable sync folder
 
@@ -362,6 +367,37 @@ class SlaveClient:
                 count = len(self._active_renders)
             status = f"rendering ({count} active)" if count > 0 else "idle"
             self.on_status_changed(status)
+
+    def _process_sync_only(self, worker_id: int, job: RenderJob):
+        """Pre-warm: sync the job's files into the persistent sync folder and
+        report completion without rendering."""
+        if self.on_job_started:
+            self.on_job_started(job)
+
+        synced = False
+        if job.farm_files_uploaded and self.sync_dir:
+            synced = self._sync_files(worker_id, job) is not None
+
+        if self.on_output:
+            if synced:
+                self.on_output(f"Worker {worker_id}: Pre-sync complete — "
+                               f"files cached, no render")
+            elif not self.sync_dir:
+                self.on_output(f"Worker {worker_id}: Pre-sync skipped — "
+                               f"no Client Sync Folder set on this machine")
+            else:
+                self.on_output(f"Worker {worker_id}: Pre-sync could not cache files")
+
+        job.status = RenderStatus.COMPLETED.value
+        job.progress = 100.0
+        self._report_completion(job)  # master cleans its uploaded bundle on completion
+        self.completed_jobs.append(job)
+        if self.on_job_completed:
+            self.on_job_completed(job)
+        if self.on_status_changed:
+            with self._lock:
+                count = len(self._active_renders)
+            self.on_status_changed(f"rendering ({count} active)" if count > 0 else "idle")
 
     def _report_completion(self, job: RenderJob):
         """Report job completion to master."""
