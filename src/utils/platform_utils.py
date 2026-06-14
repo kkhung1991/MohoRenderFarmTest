@@ -63,7 +63,7 @@ def default_moho_path() -> str:
     if IS_WINDOWS:
         return r"C:\Program Files\Moho 14\Moho.exe"
     if IS_MACOS:
-        return "/Applications/Moho 14/Moho.app"
+        return "/Applications/Moho.app"
     return ""
 
 

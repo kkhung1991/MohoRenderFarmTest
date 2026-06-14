@@ -1385,13 +1385,26 @@ class MainWindow(QMainWindow):
         self.chk_send_sibling_files.setChecked(self.config.get("farm_send_sibling_files", False))
         self.chk_send_sibling_files.setEnabled(self.chk_send_project_files.isChecked())
         file_row.addWidget(self.chk_send_sibling_files)
+
+        self.chk_send_parent_folder = QCheckBox("Include parent folder (preserve subfolders)")
+        self.chk_send_parent_folder.setToolTip(
+            "Bundle the project's PARENT folder and all subfolders, keeping the\n"
+            "directory structure. Use this when the project links references that\n"
+            "live one directory up (e.g. ../References), so those links resolve\n"
+            "on the slave. Overrides 'Include files from project folder'.")
+        self.chk_send_parent_folder.setChecked(self.config.get("farm_send_parent_folder", False))
+        self.chk_send_parent_folder.setEnabled(self.chk_send_project_files.isChecked())
+        file_row.addWidget(self.chk_send_parent_folder)
         file_row.addStretch()
 
         self.chk_send_project_files.toggled.connect(self.chk_send_sibling_files.setEnabled)
+        self.chk_send_project_files.toggled.connect(self.chk_send_parent_folder.setEnabled)
         self.chk_send_project_files.toggled.connect(
             lambda v: self.config.set("farm_send_project_files", v))
         self.chk_send_sibling_files.toggled.connect(
             lambda v: self.config.set("farm_send_sibling_files", v))
+        self.chk_send_parent_folder.toggled.connect(
+            lambda v: self.config.set("farm_send_parent_folder", v))
         mode_layout.addLayout(file_row)
 
         # Render enabled option
@@ -1607,7 +1620,7 @@ class MainWindow(QMainWindow):
         if platform_utils.IS_MACOS:
             moho_label = "Moho App Path:"
             moho_tip = ("Path to Moho.app on this Mac "
-                        "(e.g. /Applications/Moho 14/Moho.app)")
+                        "(e.g. /Applications/Moho.app)")
         elif platform_utils.IS_WINDOWS:
             moho_label = "Moho.exe Path:"
             moho_tip = "Full path to Moho.exe on this machine"
@@ -3453,6 +3466,14 @@ class MainWindow(QMainWindow):
         self._dlg_chk_send_siblings.setEnabled(self._dlg_chk_send_files.isChecked())
         self._dlg_chk_send_files.toggled.connect(self._dlg_chk_send_siblings.setEnabled)
         dlg_layout.addWidget(self._dlg_chk_send_siblings)
+        self._dlg_chk_send_parent = QCheckBox("Include parent folder (preserve subfolders)")
+        self._dlg_chk_send_parent.setToolTip(
+            "Bundle the project's parent folder and subfolders, preserving structure,\n"
+            "so references one directory up (e.g. ../References) resolve on the slave.")
+        self._dlg_chk_send_parent.setChecked(self.chk_send_parent_folder.isChecked())
+        self._dlg_chk_send_parent.setEnabled(self._dlg_chk_send_files.isChecked())
+        self._dlg_chk_send_files.toggled.connect(self._dlg_chk_send_parent.setEnabled)
+        dlg_layout.addWidget(self._dlg_chk_send_parent)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
@@ -3462,6 +3483,7 @@ class MainWindow(QMainWindow):
         # Sync checkboxes back to Farm tab settings
         self.chk_send_project_files.setChecked(self._dlg_chk_send_files.isChecked())
         self.chk_send_sibling_files.setChecked(self._dlg_chk_send_siblings.isChecked())
+        self.chk_send_parent_folder.setChecked(self._dlg_chk_send_parent.isChecked())
         return True
 
     def _send_selected_to_farm(self):
@@ -3520,8 +3542,21 @@ class MainWindow(QMainWindow):
             self.queue.remove_job(job.id)
         self._append_farm_log(f"[GUI] Sent {len(jobs)} job{'s' if len(jobs) > 1 else ''} to farm queue")
 
+    # Files/dirs never worth bundling to the farm
+    _BUNDLE_SKIP = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".svn"}
+    _BUNDLE_MAX_FILES = 5000
+    _BUNDLE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB (master upload limit)
+
     def _prepare_file_bundle(self, job):
-        """Create a zip bundle of the project file and optional siblings.
+        """Create a zip bundle of the project file and optional related media.
+
+        Modes (most inclusive wins):
+        - Include parent folder: zip the project's PARENT directory recursively,
+          preserving structure, so references one level up (../References) and in
+          subfolders resolve on the slave. The project's path relative to that
+          root is stored in farm_original_project.
+        - Include sibling files: project file + flat files in its own folder.
+        - Otherwise: just the project file.
 
         Returns path to the temporary zip file, or "" if nothing to bundle.
         """
@@ -3539,22 +3574,105 @@ class MainWindow(QMainWindow):
             _copy_images_to_root(job, on_output=lambda msg: self._append_farm_log(f"[GUI] {msg}"))
             job.copy_images = False  # Already done; slave won't have Images subfolder
 
+        include_parent = self.chk_send_parent_folder.isChecked()
+        include_siblings = self.chk_send_sibling_files.isChecked()
+
         fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
         os.close(fd)
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(str(project_path), project_path.name)
-            if self.chk_send_sibling_files.isChecked():
-                project_dir = project_path.parent
-                for f in project_dir.iterdir():
-                    if f.is_file() and f != project_path:
-                        zf.write(str(f), f.name)
+        # iCloud (and similar) files that aren't downloaded locally. Evicted
+        # iCloud files show on disk only as a hidden ".<name>.icloud" stub, and
+        # reading a not-yet-downloaded file can fail; collect anything we can't
+        # bundle so we can warn instead of silently shipping a broken bundle.
+        placeholders = []
 
-        job.farm_original_project = project_path.name
+        def _is_icloud_stub(p):
+            return p.name.startswith(".") and p.name.endswith(".icloud")
+
+        def _stub_real_name(name):
+            return name[1:-len(".icloud")]  # ".Foo.psd.icloud" -> "Foo.psd"
+
+        def _add(zf, file_path, arcname):
+            """Write a file to the zip. Records and returns False if it can't be
+            read (e.g. an evicted iCloud file with no local copy)."""
+            try:
+                zf.write(str(file_path), arcname)
+                return True
+            except OSError:
+                placeholders.append(arcname)
+                return False
+
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                if include_parent:
+                    root = project_path.parent.parent
+                    count = 0
+                    total = 0
+                    for f in root.rglob("*"):
+                        if not f.is_file() or f.is_symlink():
+                            continue
+                        rel = f.relative_to(root)
+                        if any(part in self._BUNDLE_SKIP for part in rel.parts):
+                            continue
+                        if _is_icloud_stub(f):
+                            placeholders.append((rel.parent / _stub_real_name(f.name)).as_posix())
+                            continue
+                        count += 1
+                        try:
+                            total += f.stat().st_size
+                        except OSError:
+                            pass
+                        if count > self._BUNDLE_MAX_FILES or total > self._BUNDLE_MAX_BYTES:
+                            raise ValueError(
+                                f"parent folder too large to bundle "
+                                f"({count}+ files / {total / 1024 / 1024:.0f}+ MB). "
+                                f"Move references closer to the project or reduce the folder.")
+                        _add(zf, f, rel.as_posix())
+                    job.farm_original_project = project_path.relative_to(root).as_posix()
+                else:
+                    _add(zf, project_path, project_path.name)
+                    if include_siblings:
+                        for f in project_path.parent.iterdir():
+                            if f.is_dir() or f == project_path or f.name in self._BUNDLE_SKIP:
+                                continue
+                            if _is_icloud_stub(f):
+                                placeholders.append(_stub_real_name(f.name))
+                                continue
+                            _add(zf, f, f.name)
+                    job.farm_original_project = project_path.name
+        except (OSError, ValueError) as e:
+            self._append_farm_log(f"[GUI] Bundle failed: {e}")
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+            return ""
+
+        # The project file itself must be in the bundle, or the slave can't render
+        if job.farm_original_project in placeholders:
+            self._append_farm_log(
+                f"[GUI] Bundle failed: the project file isn't downloaded from iCloud "
+                f"({job.farm_original_project}). In Finder, right-click it and choose "
+                f"'Download Now', then re-send.")
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+            return ""
+
         job.farm_files_uploaded = True
 
         size_mb = os.path.getsize(zip_path) / (1024 * 1024)
-        self._append_farm_log(f"[GUI] Prepared file bundle for {job.project_name}: {size_mb:.1f} MB")
+        scope = "parent folder tree" if include_parent else (
+            "project + folder files" if include_siblings else "project file")
+        self._append_farm_log(
+            f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
+        if placeholders:
+            shown = ", ".join(placeholders[:5]) + (" ..." if len(placeholders) > 5 else "")
+            self._append_farm_log(
+                f"[GUI] WARNING: {len(placeholders)} file(s) are not downloaded from iCloud and "
+                f"were skipped ({shown}). Renders may have missing references. In Finder, select "
+                f"the project folder and choose 'Download Now', then re-send.")
         return zip_path
 
     def _submit_job_to_farm(self, job):
@@ -4134,11 +4252,12 @@ class MainWindow(QMainWindow):
         self._cpu_timer.start(1000)
 
     def _read_cpu_times(self):
-        """Return (idle_ticks, total_ticks) for the whole system, or None.
+        """Return cumulative (idle_ticks, total_ticks) for the whole system.
 
-        Windows uses GetSystemTimes, Linux reads /proc/stat. On other
-        platforms (e.g. macOS) this returns None and the updater falls back
-        to the system load average.
+        Uses GetSystemTimes on Windows, /proc/stat on Linux, and the Mach
+        host_statistics API on macOS. CPU usage is then derived from the
+        delta between two samples (see _update_cpu_usage). Returns None if
+        the platform's counters can't be read.
         """
         from src.utils import platform_utils
 
@@ -4162,6 +4281,9 @@ class MainWindow(QMainWindow):
             # kernel time already includes idle time, so total = kernel + user
             return (idle_val, kernel_val + user_val)
 
+        if platform_utils.IS_MACOS:
+            return self._macos_cpu_times()
+
         if platform_utils.IS_LINUX:
             try:
                 with open("/proc/stat", "r") as f:
@@ -4176,20 +4298,51 @@ class MainWindow(QMainWindow):
 
         return None
 
-    def _update_cpu_usage(self):
-        """Calculate and display current CPU usage (cross-platform)."""
-        current = self._read_cpu_times()
+    def _macos_cpu_times(self):
+        """Read system CPU ticks on macOS via Mach host_statistics.
 
+        Returns (idle_ticks, total_ticks) or None. Equivalent to what tools
+        like `top` use, so the result reflects real CPU usage (not load avg).
+        """
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)  # current process always has libSystem
+
+            HOST_CPU_LOAD_INFO = 3
+            CPU_STATE_MAX = 4
+            CPU_STATE_USER, CPU_STATE_SYSTEM, CPU_STATE_IDLE, CPU_STATE_NICE = 0, 1, 2, 3
+
+            class host_cpu_load_info(ctypes.Structure):
+                _fields_ = [("cpu_ticks", ctypes.c_uint * CPU_STATE_MAX)]
+
+            libc.mach_host_self.restype = ctypes.c_uint
+            libc.host_statistics.argtypes = [
+                ctypes.c_uint, ctypes.c_int,
+                ctypes.POINTER(host_cpu_load_info),
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            libc.host_statistics.restype = ctypes.c_int
+
+            host = libc.mach_host_self()
+            info = host_cpu_load_info()
+            count = ctypes.c_int(CPU_STATE_MAX)
+            kr = libc.host_statistics(host, HOST_CPU_LOAD_INFO,
+                                      ctypes.byref(info), ctypes.byref(count))
+            if kr != 0:
+                return None
+            ticks = info.cpu_ticks
+            idle = ticks[CPU_STATE_IDLE]
+            total = (ticks[CPU_STATE_USER] + ticks[CPU_STATE_SYSTEM]
+                     + ticks[CPU_STATE_IDLE] + ticks[CPU_STATE_NICE])
+            return (idle, total)
+        except Exception:
+            return None
+
+    def _update_cpu_usage(self):
+        """Calculate and display current CPU usage from sample deltas."""
+        current = self._read_cpu_times()
         if current is None:
-            # Fallback (macOS/other): approximate with normalized load average
-            try:
-                load = os.getloadavg()[0]
-                ncpu = os.cpu_count() or 1
-                cpu_pct = max(0.0, min(100.0, load / ncpu * 100.0))
-                self.cpu_progress.setValue(int(cpu_pct))
-            except (OSError, AttributeError):
-                pass
-            return
+            return  # counters unavailable on this platform; leave bar as-is
 
         prev = self._prev_cpu_times
         self._prev_cpu_times = current

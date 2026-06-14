@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "auto_check_updates": True,
     "farm_send_project_files": False,
     "farm_send_sibling_files": False,
+    "farm_send_parent_folder": False,
     "auto_reconnect_slave": False,
     "farm_renders_dir": "",
 }
