@@ -6,10 +6,23 @@ import tempfile
 import threading
 import time
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Optional, Callable, Dict, Tuple, List
 import requests
 from src.moho_renderer import RenderJob, MohoRenderer, RenderStatus
+
+
+def _crc32_file(path, chunk_size=1024 * 1024):
+    """Compute the unsigned CRC32 of a file (matches zip CRC), or None on error."""
+    try:
+        crc = 0
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(chunk_size), b""):
+                crc = zlib.crc32(chunk, crc)
+        return crc & 0xFFFFFFFF
+    except OSError:
+        return None
 
 
 class SlaveClient:
@@ -32,6 +45,7 @@ class SlaveClient:
         self._force_update_triggered = False
         self.render_enabled = True  # Whether this slave accepts render jobs
         self.farm_renders_dir = ""  # Where farm renders go (empty = default)
+        self.sync_dir = ""  # Persistent local folder for incremental file sync (empty = off)
 
         # Callbacks
         self.on_connected: Optional[Callable[[], None]] = None
@@ -245,13 +259,21 @@ class SlaveClient:
     def _process_job(self, worker_id: int, job: RenderJob):
         """Process a single render job."""
         work_dir = None
+        persistent_workdir = False  # True when work_dir is the reusable sync folder
 
-        # Download project files from master if needed
+        # Obtain project files from master if needed
         if job.farm_files_uploaded:
-            work_dir = self._download_and_extract_files(worker_id, job)
+            # Prefer incremental sync into the persistent client folder; fall
+            # back to a full temp download if sync isn't configured or fails.
+            if self.sync_dir:
+                work_dir = self._sync_files(worker_id, job)
+                if work_dir is not None:
+                    persistent_workdir = True
+            if work_dir is None:
+                work_dir = self._download_and_extract_files(worker_id, job)
             if work_dir is None:
                 job.status = RenderStatus.FAILED.value
-                job.error_message = "Failed to download project files from master"
+                job.error_message = "Failed to obtain project files from master"
                 self._report_completion(job)
                 self.completed_jobs.append(job)
                 if self.on_job_completed:
@@ -278,7 +300,7 @@ class SlaveClient:
                 if self.on_output:
                     self.on_output(f"Worker {worker_id}: ERROR: {job.error_message}")
                 self._report_completion(job)
-                if work_dir:
+                if work_dir and not persistent_workdir:
                     self._cleanup_work_dir(work_dir, job)
                 self.completed_jobs.append(job)
                 if self.on_job_completed:
@@ -325,8 +347,8 @@ class SlaveClient:
         # Report completion
         self._report_completion(job)
 
-        # Cleanup downloaded files
-        if work_dir:
+        # Cleanup temp files (but keep the persistent sync folder for reuse)
+        if work_dir and not persistent_workdir:
             self._cleanup_work_dir(work_dir, job)
 
         self.completed_jobs.append(job)
@@ -386,9 +408,20 @@ class SlaveClient:
                 shutil.rmtree(str(work_dir), ignore_errors=True)
                 return None
 
+            total = int(resp.headers.get("Content-Length", 0))
+            done = 0
+            last_pct = -10
             with open(str(zip_path), "wb") as f:
                 for chunk in resp.iter_content(chunk_size=65536):
                     f.write(chunk)
+                    done += len(chunk)
+                    if total > 0 and self.on_output:
+                        pct = int(done * 100 / total)
+                        if pct >= last_pct + 10:
+                            last_pct = pct
+                            self.on_output(
+                                f"Worker {worker_id}: Downloading... {pct}% "
+                                f"({done / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB)")
 
             size_mb = zip_path.stat().st_size / (1024 * 1024)
             if self.on_output:
@@ -419,6 +452,114 @@ class SlaveClient:
                 self.on_output(f"Worker {worker_id}: Download error: {e}")
             shutil.rmtree(str(work_dir), ignore_errors=True)
             return None
+
+    def _sync_files(self, worker_id: int, job: RenderJob):
+        """Incrementally sync a job's files into the persistent client folder.
+
+        Compares the master's file manifest (path/size/CRC) against what's
+        already in the sync folder and downloads only missing or changed files,
+        keeping a single reusable copy. Returns the sync root (persistent, not
+        deleted after render), or None to fall back to a full temp download.
+        """
+        sync_root = Path(self.sync_dir).expanduser()
+        try:
+            sync_root.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            if self.on_output:
+                self.on_output(f"Worker {worker_id}: Cannot use sync folder {sync_root}: {e}")
+            return None
+
+        # Fetch the file manifest for this job
+        try:
+            resp = requests.get(f"{self.master_url}/api/file_manifest/{job.id}", timeout=60)
+            if resp.status_code != 200:
+                if self.on_output:
+                    self.on_output(f"Worker {worker_id}: Manifest unavailable "
+                                   f"(HTTP {resp.status_code}); doing full download")
+                return None
+            files = resp.json().get("files", [])
+        except Exception as e:
+            if self.on_output:
+                self.on_output(f"Worker {worker_id}: Manifest error ({e}); doing full download")
+            return None
+
+        if not files:
+            if self.on_output:
+                self.on_output(f"Worker {worker_id}: Empty manifest; doing full download")
+            return None
+
+        # Determine which files need downloading (missing / size or CRC mismatch)
+        to_download = []
+        for entry in files:
+            rel = entry.get("path", "")
+            if not rel:
+                continue
+            target = sync_root / rel
+            if (target.is_file()
+                    and target.stat().st_size == entry.get("size")
+                    and _crc32_file(target) == entry.get("crc")):
+                continue
+            to_download.append(entry)
+
+        reused = len(files) - len(to_download)
+        if self.on_output:
+            self.on_output(f"Worker {worker_id}: Sync: {len(files)} files, "
+                           f"{len(to_download)} to update, {reused} reused")
+
+        total_bytes = sum(e.get("size", 0) for e in to_download)
+        done_bytes = 0
+        last_pct = -10
+        for entry in to_download:
+            rel = entry["path"]
+            target = sync_root / rel
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                r = requests.get(f"{self.master_url}/api/download_file/{job.id}",
+                                 params={"path": rel}, timeout=600, stream=True)
+                if r.status_code != 200:
+                    if self.on_output:
+                        self.on_output(f"Worker {worker_id}: Failed to fetch {rel} "
+                                       f"(HTTP {r.status_code})")
+                    return None
+                tmp = target.with_name(target.name + ".part")
+                with open(str(tmp), "wb") as f:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                        done_bytes += len(chunk)
+                        if total_bytes > 0 and self.on_output:
+                            pct = int(done_bytes * 100 / total_bytes)
+                            if pct >= last_pct + 10:
+                                last_pct = pct
+                                self.on_output(
+                                    f"Worker {worker_id}: Syncing... {pct}% "
+                                    f"({done_bytes / 1024 / 1024:.1f}/"
+                                    f"{total_bytes / 1024 / 1024:.1f} MB)")
+                os.replace(str(tmp), str(target))
+            except Exception as e:
+                if self.on_output:
+                    self.on_output(f"Worker {worker_id}: Sync error for {rel}: {e}")
+                return None
+
+        if self.on_output:
+            if to_download:
+                self.on_output(f"Worker {worker_id}: Sync complete "
+                               f"({total_bytes / 1024 / 1024:.1f} MB transferred)")
+            else:
+                self.on_output(f"Worker {worker_id}: All files already up to date "
+                               f"(0 MB transferred)")
+
+        # Point the job at the synced project file
+        original = job.farm_original_project or Path(job.project_file).name
+        new_project = sync_root / original
+        if not new_project.exists():
+            if self.on_output:
+                self.on_output(f"Worker {worker_id}: Synced project not found "
+                               f"({new_project}); doing full download")
+            return None
+        job.project_file = str(new_project)
+        if self.on_output:
+            self.on_output(f"Worker {worker_id}: Using synced project: {new_project}")
+        return sync_root
 
     def _cleanup_work_dir(self, work_dir, job: RenderJob):
         """Clean up temp directory and request master cleanup."""

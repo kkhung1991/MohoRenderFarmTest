@@ -3,9 +3,10 @@ import json
 import threading
 import time
 import socket
+import zipfile
 from pathlib import Path
 from typing import Optional, Callable, Dict, List
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from src.moho_renderer import RenderJob, RenderStatus
 from src.config import CONFIG_DIR
 
@@ -309,6 +310,53 @@ class MasterServer:
                 self.on_output(f"Sending files to slave {slave_ip}: {job_id} ({size_mb:.1f} MB)")
             return send_file(str(path), mimetype="application/zip",
                              as_attachment=True, download_name=f"{job_id}.zip")
+
+        @app.route("/api/file_manifest/<job_id>", methods=["GET"])
+        def file_manifest(job_id):
+            """List files in a job bundle with size + CRC, for incremental sync."""
+            path = FARM_FILES_DIR / f"{job_id}.zip"
+            if not path.exists():
+                return jsonify({"error": "not found"}), 404
+            try:
+                with zipfile.ZipFile(str(path), "r") as zf:
+                    files = [
+                        {"path": zi.filename, "size": zi.file_size, "crc": zi.CRC}
+                        for zi in zf.infolist() if not zi.is_dir()
+                    ]
+                return jsonify({"files": files})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/download_file/<job_id>", methods=["GET"])
+        def download_file(job_id):
+            """Stream a single file out of a job bundle (for incremental sync)."""
+            rel = request.args.get("path", "")
+            path = FARM_FILES_DIR / f"{job_id}.zip"
+            if not rel or not path.exists():
+                return jsonify({"error": "not found"}), 404
+            try:
+                zf = zipfile.ZipFile(str(path), "r")
+                try:
+                    info = zf.getinfo(rel)
+                except KeyError:
+                    zf.close()
+                    return jsonify({"error": "file not in bundle"}), 404
+
+                def generate():
+                    try:
+                        with zf.open(info, "r") as src:
+                            while True:
+                                chunk = src.read(65536)
+                                if not chunk:
+                                    break
+                                yield chunk
+                    finally:
+                        zf.close()
+
+                return Response(generate(), mimetype="application/octet-stream",
+                                headers={"Content-Length": str(info.file_size)})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
 
         @app.route("/api/cleanup_files/<job_id>", methods=["DELETE"])
         def cleanup_files(job_id):

@@ -1731,6 +1731,29 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(farm_render_group)
 
+        # Client sync folder (incremental file sync for farm jobs)
+        sync_group = QGroupBox("Client Sync Folder")
+        sync_layout = QFormLayout(sync_group)
+        self.edit_sync_dir = QLineEdit()
+        self.edit_sync_dir.setText(self.config.get("farm_sync_dir", ""))
+        self.edit_sync_dir.setPlaceholderText("(optional) keep one local copy and only download changed files")
+        self.edit_sync_dir.setToolTip(
+            "When set, farm jobs that ship files are synced into this folder and kept\n"
+            "as a single local copy. On later jobs only changed/new files are downloaded\n"
+            "(compared by size + CRC), so large projects don't re-transfer every time.\n"
+            "Leave empty to download a fresh temporary copy for each job.")
+        browse_sync = QPushButton("Browse...")
+        browse_sync.setFixedWidth(browse_sync.sizeHint().width() + 10)
+        browse_sync.clicked.connect(self._browse_sync_dir)
+        sync_row = QHBoxLayout()
+        sync_row.addWidget(self.edit_sync_dir)
+        sync_row.addWidget(browse_sync)
+        sync_layout.addRow("Folder:", sync_row)
+        self.edit_sync_dir.textChanged.connect(
+            lambda t: self.config.set("farm_sync_dir", t))
+
+        layout.addWidget(sync_group)
+
         # Context menu (Windows-only feature: edits the Windows registry)
         from src.utils import platform_utils
         ctx_group = QGroupBox("Windows Integration")
@@ -2766,6 +2789,11 @@ class MainWindow(QMainWindow):
         if folder:
             self.edit_project_root.setText(folder)
 
+    def _browse_sync_dir(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Client Sync Folder")
+        if folder:
+            self.edit_sync_dir.setText(folder)
+
     def _browse_default_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Default Output Folder")
         if folder:
@@ -3178,6 +3206,7 @@ class MainWindow(QMainWindow):
                                         max_concurrent=self.config.get("max_local_renders", 1))
         self.slave_client.render_enabled = self.chk_render_enabled.isChecked()
         self.slave_client.farm_renders_dir = self.config.get("farm_renders_dir", "")
+        self.slave_client.sync_dir = self.config.get("farm_sync_dir", "")
         self.slave_client.on_output = lambda msg: self.farm_log_signal.emit(f"[SLAVE] {msg}")
         self.slave_client.on_connected = lambda: (
             self.farm_status_signal.emit(f"Slave connected to {host}:{port}", "#a6e3a1"),
