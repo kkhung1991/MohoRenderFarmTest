@@ -42,6 +42,8 @@ DEFAULT_CONFIG = {
     "farm_renders_dir": "",
     "farm_sync_dir": "",
     "farm_sync_prune": False,
+    "farm_version_output": False,
+    "master_renders_dir": "",
 }
 
 FORMATS = [

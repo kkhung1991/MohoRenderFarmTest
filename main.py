@@ -320,6 +320,7 @@ def _run_slave_mode(args):
     slave.farm_renders_dir = config.get("farm_renders_dir", "")
     slave.sync_dir = config.get("farm_sync_dir", "")
     slave.sync_prune = config.get("farm_sync_prune", False)
+    slave.version_output = config.get("farm_version_output", False)
     slave.on_output = lambda msg: print(f"[SLAVE] {msg}")
 
     slave.start()

@@ -13,9 +13,11 @@ from PyQt6.QtWidgets import (
     QTextEdit, QSplitter, QStatusBar, QMenuBar, QMenu, QMessageBox,
     QProgressBar, QFormLayout, QGridLayout, QApplication, QAbstractItemView,
     QDialog, QDialogButtonBox, QInputDialog, QScrollArea, QStackedWidget,
+    QListWidget, QListWidgetItem, QSlider,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QMimeData, QUrl
-from PyQt6.QtGui import QAction, QDragEnterEvent, QDropEvent, QIcon, QShortcut, QKeySequence, QFont, QColor
+from PyQt6.QtGui import (QAction, QDragEnterEvent, QDropEvent, QIcon, QShortcut,
+                         QKeySequence, QFont, QColor, QDesktopServices)
 from src.config import (
     AppConfig, APP_NAME, APP_VERSION, APP_AUTHOR,
     FORMATS, WINDOWS_PRESETS, RESOLUTIONS, MOHO_FILE_EXTENSIONS,
@@ -957,8 +959,12 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._create_farm_tab(), "Render Farm")
         # Tab 4: Transfers (client file/sync status)
         self.tabs.addTab(self._create_transfers_tab(), "Transfers")
-        # Tab 5: Settings
+        # Tab 5: Renders (browse / play / download finished videos)
+        self.tabs.addTab(self._create_renders_tab(), "Renders")
+        # Tab 6: Settings
         self.tabs.addTab(self._create_app_settings_tab(), "App Settings")
+
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # Status bar
         self.status_bar = QStatusBar()
@@ -1729,7 +1735,10 @@ class MainWindow(QMainWindow):
 
         bt = t.get("bytes_total") or 0
         bd = t.get("bytes_done") or 0
-        if bt > 0:
+        if phase == "rendering" and t.get("render_pct") is not None:
+            pct = max(0, min(100, int(t.get("render_pct") or 0)))
+            pct_text = f"{pct}%"
+        elif bt > 0:
             pct = max(0, min(100, int(bd * 100 / bt)))
             pct_text = f"{bd / 1024 / 1024:.0f} / {bt / 1024 / 1024:.0f} MB"
         elif phase == "idle":
@@ -1786,6 +1795,218 @@ class MainWindow(QMainWindow):
                          in ("Downloading", "Syncing", "Rendering"))
             self.lbl_transfers_summary.setText(
                 f"{len(rows)} client(s), {active} active")
+
+    # --- Renders tab: browse / play / download finished videos ---
+    _VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".gif", ".mkv", ".webm")
+
+    def _create_renders_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        info = QLabel("Finished videos collected from the farm (and this machine's farm "
+                      "renders). Select one to preview, or save a copy to your computer.")
+        info.setStyleSheet("color: #a6adc8;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        split = QSplitter(Qt.Orientation.Horizontal)
+
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        self.renders_list = QListWidget()
+        self.renders_list.itemSelectionChanged.connect(self._update_render_buttons)
+        self.renders_list.itemDoubleClicked.connect(lambda _it: self._play_selected_render())
+        lv.addWidget(self.renders_list)
+        btn_row = QHBoxLayout()
+        b_refresh = QPushButton("Refresh")
+        b_refresh.clicked.connect(self._refresh_renders_list)
+        self.btn_render_save = QPushButton("Save to…")
+        self.btn_render_save.setToolTip("Save a copy of the selected video to your computer")
+        self.btn_render_save.clicked.connect(self._save_selected_render)
+        self.btn_render_openext = QPushButton("Open in Player")
+        self.btn_render_openext.clicked.connect(self._open_selected_render_external)
+        self.btn_render_reveal = QPushButton("Reveal")
+        self.btn_render_reveal.clicked.connect(self._reveal_selected_render)
+        for b in (b_refresh, self.btn_render_save, self.btn_render_openext, self.btn_render_reveal):
+            btn_row.addWidget(b)
+        lv.addLayout(btn_row)
+        split.addWidget(left)
+
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        self._player = None
+        self._QMediaPlayer = None
+        try:
+            from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+            from PyQt6.QtMultimediaWidgets import QVideoWidget
+            self._QMediaPlayer = QMediaPlayer
+            self._video_widget = QVideoWidget()
+            self._player = QMediaPlayer()
+            self._audio = QAudioOutput()
+            self._player.setAudioOutput(self._audio)
+            self._player.setVideoOutput(self._video_widget)
+            rv.addWidget(self._video_widget, 1)
+            ctrl = QHBoxLayout()
+            self.btn_play = QPushButton("Play")
+            self.btn_play.clicked.connect(self._toggle_play)
+            self.slider_pos = QSlider(Qt.Orientation.Horizontal)
+            self.slider_pos.sliderMoved.connect(self._seek_render)
+            self.lbl_render_time = QLabel("0:00 / 0:00")
+            self.chk_loop = QCheckBox("Loop")
+            self.chk_loop.setChecked(True)
+            ctrl.addWidget(self.btn_play)
+            ctrl.addWidget(self.slider_pos, 1)
+            ctrl.addWidget(self.lbl_render_time)
+            ctrl.addWidget(self.chk_loop)
+            rv.addLayout(ctrl)
+            self._player.positionChanged.connect(self._on_player_position)
+            self._player.durationChanged.connect(self._on_player_duration)
+            self._player.playbackStateChanged.connect(self._on_player_state)
+            self._player.mediaStatusChanged.connect(self._on_player_media_status)
+        except Exception:
+            self._player = None
+            note = QLabel("Embedded video preview isn't available on this system.\n"
+                          "Use \"Open in Player\" to watch in your default video app.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #a6adc8;")
+            rv.addWidget(note)
+            rv.addStretch()
+        split.addWidget(right)
+        split.setSizes([320, 620])
+        layout.addWidget(split, 1)
+
+        self._renders_tab = widget
+        self._refresh_renders_list()
+        return widget
+
+    def _on_tab_changed(self, _index):
+        if getattr(self, "_renders_tab", None) is not None and \
+                self.tabs.currentWidget() is self._renders_tab:
+            self._refresh_renders_list()
+
+    def _render_dirs(self):
+        from src.config import CONFIG_DIR as _CD, DEFAULT_FARM_RENDERS_DIR
+        dirs = []
+        if self.master_server:
+            dirs.append(self.master_server.renders_dir())
+        else:
+            md = self.config.get("master_renders_dir", "").strip()
+            dirs.append(Path(md).expanduser() if md else _CD / "farm_output")
+        fr = self.config.get("farm_renders_dir", "").strip()
+        dirs.append(Path(fr).expanduser() if fr else Path(DEFAULT_FARM_RENDERS_DIR))
+        return dirs
+
+    def _refresh_renders_list(self):
+        self.renders_list.clear()
+        seen = set()
+        items = []
+        for d in self._render_dirs():
+            try:
+                if not d or not Path(d).is_dir():
+                    continue
+                for f in Path(d).rglob("*"):
+                    if not f.is_file() or f.suffix.lower() not in self._VIDEO_EXTS:
+                        continue
+                    rp = str(f.resolve())
+                    if rp in seen:
+                        continue
+                    seen.add(rp)
+                    try:
+                        st = f.stat()
+                        items.append((st.st_mtime, f, st.st_size))
+                    except OSError:
+                        pass
+            except OSError:
+                continue
+        items.sort(key=lambda x: x[0], reverse=True)
+        for _mt, f, sz in items:
+            it = QListWidgetItem(f"{f.name}   ({sz / 1024 / 1024:.1f} MB)")
+            it.setData(Qt.ItemDataRole.UserRole, str(f))
+            self.renders_list.addItem(it)
+        self._update_render_buttons()
+
+    def _selected_render_path(self):
+        it = self.renders_list.currentItem()
+        return it.data(Qt.ItemDataRole.UserRole) if it else None
+
+    def _update_render_buttons(self):
+        has = self._selected_render_path() is not None
+        for b in (self.btn_render_save, self.btn_render_openext, self.btn_render_reveal):
+            b.setEnabled(has)
+
+    def _play_selected_render(self):
+        path = self._selected_render_path()
+        if not path:
+            return
+        if self._player is not None:
+            self._player.setSource(QUrl.fromLocalFile(path))
+            self._player.play()
+        else:
+            self._open_selected_render_external()
+
+    def _toggle_play(self):
+        if self._player is None:
+            return
+        st = self._player.playbackState()
+        if st == self._QMediaPlayer.PlaybackState.PlayingState:
+            self._player.pause()
+        else:
+            if not self._player.source().isValid():
+                self._play_selected_render()
+            else:
+                self._player.play()
+
+    def _seek_render(self, pos):
+        if self._player is not None:
+            self._player.setPosition(pos)
+
+    @staticmethod
+    def _fmt_ms(ms):
+        s = int(ms / 1000)
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _on_player_position(self, pos):
+        if not self.slider_pos.isSliderDown():
+            self.slider_pos.setValue(pos)
+        self.lbl_render_time.setText(f"{self._fmt_ms(pos)} / {self._fmt_ms(self._player.duration())}")
+
+    def _on_player_duration(self, dur):
+        self.slider_pos.setRange(0, dur)
+        self.lbl_render_time.setText(f"{self._fmt_ms(self._player.position())} / {self._fmt_ms(dur)}")
+
+    def _on_player_state(self, state):
+        playing = state == self._QMediaPlayer.PlaybackState.PlayingState
+        self.btn_play.setText("Pause" if playing else "Play")
+
+    def _on_player_media_status(self, status):
+        # Loop playback when enabled
+        if (status == self._QMediaPlayer.MediaStatus.EndOfMedia
+                and self.chk_loop.isChecked()):
+            self._player.setPosition(0)
+            self._player.play()
+
+    def _save_selected_render(self):
+        path = self._selected_render_path()
+        if not path:
+            return
+        import shutil
+        dest, _ = QFileDialog.getSaveFileName(self, "Save Render As", os.path.basename(path))
+        if dest:
+            try:
+                shutil.copy2(path, dest)
+                self._append_farm_log(f"[GUI] Saved render to {dest}")
+            except OSError as e:
+                QMessageBox.warning(self, "Save Failed", str(e))
+
+    def _open_selected_render_external(self):
+        path = self._selected_render_path()
+        if path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def _reveal_selected_render(self):
+        path = self._selected_render_path()
+        if path:
+            from src.utils import platform_utils
+            platform_utils.open_in_file_manager(path)
 
     def _create_app_settings_tab(self):
         scroll = QScrollArea()
@@ -1884,6 +2105,16 @@ class MainWindow(QMainWindow):
         self.edit_farm_renders_dir.textChanged.connect(
             lambda t: self.config.set("farm_renders_dir", t))
 
+        self.chk_version_output = QCheckBox("Version output (add timestamp, don't overwrite)")
+        self.chk_version_output.setToolTip(
+            "When rendering on the farm, name each output with a timestamp (e.g.\n"
+            "Intro_20260614_154500.mp4) so re-rendering the same project keeps the\n"
+            "previous file instead of overwriting it.")
+        self.chk_version_output.setChecked(self.config.get("farm_version_output", False))
+        self.chk_version_output.toggled.connect(
+            lambda v: self.config.set("farm_version_output", v))
+        farm_render_layout.addRow("", self.chk_version_output)
+
         layout.addWidget(farm_render_group)
 
         # Client sync folder (incremental file sync for farm jobs)
@@ -1918,6 +2149,26 @@ class MainWindow(QMainWindow):
         sync_layout.addRow("", self.chk_sync_prune)
 
         layout.addWidget(sync_group)
+
+        # Master renders folder (where finished videos uploaded by slaves are kept)
+        mrender_group = QGroupBox("Master Renders Folder")
+        mrender_layout = QFormLayout(mrender_group)
+        self.edit_master_renders_dir = QLineEdit()
+        self.edit_master_renders_dir.setText(self.config.get("master_renders_dir", ""))
+        self.edit_master_renders_dir.setPlaceholderText("default: <config>/farm_output")
+        self.edit_master_renders_dir.setToolTip(
+            "Where the master stores finished videos uploaded by render clients.\n"
+            "Browse and play these in the Renders tab. (Set before starting the master.)")
+        browse_mr = QPushButton("Browse...")
+        browse_mr.setFixedWidth(browse_mr.sizeHint().width() + 10)
+        browse_mr.clicked.connect(self._browse_master_renders_dir)
+        mr_row = QHBoxLayout()
+        mr_row.addWidget(self.edit_master_renders_dir)
+        mr_row.addWidget(browse_mr)
+        mrender_layout.addRow("Folder:", mr_row)
+        self.edit_master_renders_dir.textChanged.connect(
+            lambda t: self.config.set("master_renders_dir", t))
+        layout.addWidget(mrender_group)
 
         # Context menu (Windows-only feature: edits the Windows registry)
         from src.utils import platform_utils
@@ -2963,6 +3214,11 @@ class MainWindow(QMainWindow):
         if folder:
             self.edit_sync_dir.setText(folder)
 
+    def _browse_master_renders_dir(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Master Renders Folder")
+        if folder:
+            self.edit_master_renders_dir.setText(folder)
+
     def _refresh_sync_dir_label(self):
         """Update the Farm tab's Client Sync Folder status label from config."""
         if not hasattr(self, "lbl_farm_sync_dir"):
@@ -3150,6 +3406,7 @@ class MainWindow(QMainWindow):
         from src.network.master import MasterServer
         port = self.spin_port.value()
         self.master_server = MasterServer(port=port)
+        self.master_server.master_renders_dir = self.config.get("master_renders_dir", "")
         self.master_server.on_output = lambda msg: self.farm_log_signal.emit(f"[MASTER] {msg}")
         self.master_server.on_slave_connected = lambda s: (self._refresh_slaves(), self.farm_log_signal.emit(f"[MASTER] Slave connected: {s}"))
         self.master_server.on_slave_disconnected = lambda s: (self._refresh_slaves(), self.farm_log_signal.emit(f"[MASTER] Slave disconnected: {s}"))
@@ -3423,6 +3680,7 @@ class MainWindow(QMainWindow):
         self.slave_client.farm_renders_dir = self.config.get("farm_renders_dir", "")
         self.slave_client.sync_dir = self.config.get("farm_sync_dir", "")
         self.slave_client.sync_prune = self.config.get("farm_sync_prune", False)
+        self.slave_client.version_output = self.config.get("farm_version_output", False)
         self.slave_client.on_output = lambda msg: self.farm_log_signal.emit(f"[SLAVE] {msg}")
         self.slave_client.on_connected = lambda: (
             self.farm_status_signal.emit(f"Slave connected to {host}:{port}", "#a6e3a1"),
