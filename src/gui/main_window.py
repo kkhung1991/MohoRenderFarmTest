@@ -3580,6 +3580,28 @@ class MainWindow(QMainWindow):
         fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix=f"farm_{job.id}_")
         os.close(fd)
 
+        # iCloud (and similar) files that aren't downloaded locally. Evicted
+        # iCloud files show on disk only as a hidden ".<name>.icloud" stub, and
+        # reading a not-yet-downloaded file can fail; collect anything we can't
+        # bundle so we can warn instead of silently shipping a broken bundle.
+        placeholders = []
+
+        def _is_icloud_stub(p):
+            return p.name.startswith(".") and p.name.endswith(".icloud")
+
+        def _stub_real_name(name):
+            return name[1:-len(".icloud")]  # ".Foo.psd.icloud" -> "Foo.psd"
+
+        def _add(zf, file_path, arcname):
+            """Write a file to the zip. Records and returns False if it can't be
+            read (e.g. an evicted iCloud file with no local copy)."""
+            try:
+                zf.write(str(file_path), arcname)
+                return True
+            except OSError:
+                placeholders.append(arcname)
+                return False
+
         try:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 if include_parent:
@@ -3589,7 +3611,11 @@ class MainWindow(QMainWindow):
                     for f in root.rglob("*"):
                         if not f.is_file() or f.is_symlink():
                             continue
-                        if any(part in self._BUNDLE_SKIP for part in f.relative_to(root).parts):
+                        rel = f.relative_to(root)
+                        if any(part in self._BUNDLE_SKIP for part in rel.parts):
+                            continue
+                        if _is_icloud_stub(f):
+                            placeholders.append((rel.parent / _stub_real_name(f.name)).as_posix())
                             continue
                         count += 1
                         try:
@@ -3601,17 +3627,33 @@ class MainWindow(QMainWindow):
                                 f"parent folder too large to bundle "
                                 f"({count}+ files / {total / 1024 / 1024:.0f}+ MB). "
                                 f"Move references closer to the project or reduce the folder.")
-                        zf.write(str(f), f.relative_to(root).as_posix())
+                        _add(zf, f, rel.as_posix())
                     job.farm_original_project = project_path.relative_to(root).as_posix()
                 else:
-                    zf.write(str(project_path), project_path.name)
+                    _add(zf, project_path, project_path.name)
                     if include_siblings:
                         for f in project_path.parent.iterdir():
-                            if f.is_file() and f != project_path and f.name not in self._BUNDLE_SKIP:
-                                zf.write(str(f), f.name)
+                            if f.is_dir() or f == project_path or f.name in self._BUNDLE_SKIP:
+                                continue
+                            if _is_icloud_stub(f):
+                                placeholders.append(_stub_real_name(f.name))
+                                continue
+                            _add(zf, f, f.name)
                     job.farm_original_project = project_path.name
         except (OSError, ValueError) as e:
             self._append_farm_log(f"[GUI] Bundle failed: {e}")
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+            return ""
+
+        # The project file itself must be in the bundle, or the slave can't render
+        if job.farm_original_project in placeholders:
+            self._append_farm_log(
+                f"[GUI] Bundle failed: the project file isn't downloaded from iCloud "
+                f"({job.farm_original_project}). In Finder, right-click it and choose "
+                f"'Download Now', then re-send.")
             try:
                 os.unlink(zip_path)
             except OSError:
@@ -3625,6 +3667,12 @@ class MainWindow(QMainWindow):
             "project + folder files" if include_siblings else "project file")
         self._append_farm_log(
             f"[GUI] Prepared file bundle for {job.project_name} ({scope}): {size_mb:.1f} MB")
+        if placeholders:
+            shown = ", ".join(placeholders[:5]) + (" ..." if len(placeholders) > 5 else "")
+            self._append_farm_log(
+                f"[GUI] WARNING: {len(placeholders)} file(s) are not downloaded from iCloud and "
+                f"were skipped ({shown}). Renders may have missing references. In Finder, select "
+                f"the project folder and choose 'Download Now', then re-send.")
         return zip_path
 
     def _submit_job_to_farm(self, job):
