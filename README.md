@@ -13,6 +13,9 @@ Created by **Damián Turkieh**
 - **Submit-Only Slaves** - Slaves can be configured to only submit jobs without rendering, ideal for remote animators
 - **Slave Status Panel** - When running as a slave, the Farm tab shows a real-time status panel with connection, workers, completed/failed jobs, and uptime
 - **Transfers Tab** - Master-side dashboard showing each client's live file-transfer/sync status: activity (downloading/syncing/rendering), a progress bar, network speed, file counts, and how much project data is cached locally
+- **Renders Tab** - Browse finished videos collected from the farm, preview them in a built-in player (timeline scrubber + loop), save a copy to your computer, reveal, or open in your default player. Slaves upload finished videos back to the master automatically
+- **Versioned Output** - Optionally timestamp farm output filenames so re-rendering a project doesn't overwrite the previous file
+- **On-Demand File Serving** - When submitting on the master, project files are served directly from disk (no re-zipping every send); clients fetch only what changed
 - **Incremental Client Sync** - Optional per-client sync folder that keeps one local copy of project files and only re-downloads what changed (compared by size + CRC), with an opt-in "mirror exactly" prune and a no-render "Pre-sync to Farm" pre-warm
 - **Concurrent Rendering** - Configurable max simultaneous renders (local queue and slave mode)
 - **Full GUI** - Dark-themed PyQt6 interface with drag-and-drop support and descriptive tooltips

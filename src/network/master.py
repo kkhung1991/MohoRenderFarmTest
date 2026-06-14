@@ -64,6 +64,7 @@ class MasterServer:
         # job_id -> {"root": str, "manifest": [{path,size,crc}]} for files served
         # directly from a local folder (no zip) when submitting on the master.
         self.file_sources: Dict[str, dict] = {}
+        self.master_renders_dir = ""  # where uploaded rendered videos are stored
         self._cancel_requests: set = set()  # job IDs that slaves should cancel
         self._force_update = False  # When True, heartbeat tells all slaves to update
         self._paused = False  # When True, no new jobs are dispatched to slaves
@@ -166,6 +167,13 @@ class MasterServer:
                     t["updated"] = time.time()
                     self.slaves[key].transfer = t
                     self.slaves[key].last_heartbeat = time.time()
+                    # Reflect live render progress on the active job
+                    if (data.get("phase") == "rendering" and "render_pct" in data
+                            and key in self.active_jobs):
+                        try:
+                            self.active_jobs[key].progress = float(data["render_pct"])
+                        except (TypeError, ValueError):
+                            pass
             return jsonify({"status": "ok"})
 
         @app.route("/api/get_job", methods=["GET"])
@@ -406,6 +414,25 @@ class MasterServer:
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        @app.route("/api/upload_render/<job_id>", methods=["POST"])
+        def upload_render(job_id):
+            """Receive a finished rendered video from a slave for review on the master."""
+            if "render" not in request.files:
+                return jsonify({"error": "no file"}), 400
+            f = request.files["render"]
+            dest_dir = self.renders_dir()
+            try:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                safe = os.path.basename(f.filename or f"{job_id}.mp4")
+                dest = dest_dir / safe
+                f.save(str(dest))
+                size = dest.stat().st_size
+            except OSError as e:
+                return jsonify({"error": str(e)}), 500
+            if self.on_output:
+                self.on_output(f"Received render from slave: {safe} ({size / 1024 / 1024:.1f} MB)")
+            return jsonify({"status": "ok", "size": size})
+
         @app.route("/api/cleanup_files/<job_id>", methods=["DELETE"])
         def cleanup_files(job_id):
             path = FARM_FILES_DIR / f"{job_id}.zip"
@@ -414,6 +441,12 @@ class MasterServer:
                 if self.on_output:
                     self.on_output(f"Cleaned up files for job {job_id}")
             return jsonify({"status": "deleted"})
+
+    def renders_dir(self) -> Path:
+        """Folder where rendered videos uploaded by slaves are stored."""
+        if self.master_renders_dir:
+            return Path(self.master_renders_dir).expanduser()
+        return CONFIG_DIR / "farm_output"
 
     def register_file_source(self, job_id: str, root: str, manifest: list):
         """Register a folder-backed file source so the job's files are served

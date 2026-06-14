@@ -29,6 +29,10 @@ def _crc32_file(path, chunk_size=1024 * 1024):
 class SlaveClient:
     """Connects to a master server and processes render jobs."""
 
+    # Video output extensions, for versioned (timestamped) output filenames
+    _VIDEO_EXT = {"MP4": ".mp4", "QT": ".mov", "M4V": ".m4v", "AVI": ".avi",
+                  "ASF": ".asf", "MOV": ".mov", "Animated GIF": ".gif", "GIF": ".gif"}
+
     def __init__(self, master_host: str, master_port: int, moho_path: str,
                  slave_port: int = 0, max_concurrent: int = 1):
         self.master_host = master_host
@@ -48,6 +52,7 @@ class SlaveClient:
         self.farm_renders_dir = ""  # Where farm renders go (empty = default)
         self.sync_dir = ""  # Persistent local folder for incremental file sync (empty = off)
         self.sync_prune = False  # Delete previously-synced files no longer in the project
+        self.version_output = False  # Add a timestamp to farm output (don't overwrite)
         self.last_transfer = {}  # Latest transfer/sync status (for local display)
         self._last_transfer_report = 0.0
 
@@ -278,6 +283,42 @@ class SlaveClient:
         except Exception:
             pass
 
+    def _resolve_render_file(self, job: RenderJob):
+        """Best-effort path to the single rendered video file for a job, or None
+        (e.g. for image-sequence formats which aren't single files)."""
+        ext = self._VIDEO_EXT.get(job.format)
+        if not ext or not job.output_path:
+            return None
+        p = Path(job.output_path)
+        if p.suffix:
+            return p
+        return p / (Path(job.project_file).stem + ext)
+
+    def _upload_render(self, worker_id: int, job: RenderJob):
+        """Upload a finished video to the master so it can be reviewed there."""
+        f = self._resolve_render_file(job)
+        if not f or not f.exists():
+            return
+        try:
+            size_mb = f.stat().st_size / (1024 * 1024)
+            self._report_transfer(force=True, phase="uploading", project=job.project_name,
+                                  bytes_total=f.stat().st_size, bytes_done=0)
+            if self.on_output:
+                self.on_output(f"Worker {worker_id}: Uploading render to master: "
+                               f"{f.name} ({size_mb:.1f} MB)")
+            with open(str(f), "rb") as fh:
+                resp = requests.post(f"{self.master_url}/api/upload_render/{job.id}",
+                                     files={"render": (f.name, fh, "application/octet-stream")},
+                                     timeout=1800)
+            if self.on_output:
+                if resp.status_code == 200:
+                    self.on_output(f"Worker {worker_id}: Render uploaded to master: {f.name}")
+                else:
+                    self.on_output(f"Worker {worker_id}: Render upload failed: HTTP {resp.status_code}")
+        except Exception as e:
+            if self.on_output:
+                self.on_output(f"Worker {worker_id}: Render upload error: {e}")
+
     def _process_job(self, worker_id: int, job: RenderJob):
         """Process a single render job."""
         # Pre-warm / sync-only job: cache files locally, don't render
@@ -321,7 +362,15 @@ class SlaveClient:
             from src.config import DEFAULT_FARM_RENDERS_DIR
             renders_dir = self.farm_renders_dir or DEFAULT_FARM_RENDERS_DIR
             name = Path(job.project_file).stem
-            if job.subfolder_project:
+            if self.version_output:
+                # Timestamped name so re-renders don't overwrite the previous one
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                ext = self._VIDEO_EXT.get(job.format)
+                if ext:
+                    job.output_path = os.path.join(renders_dir, f"{name}_{ts}{ext}")
+                else:
+                    job.output_path = os.path.join(renders_dir, f"{name}_{ts}")
+            elif job.subfolder_project:
                 job.output_path = os.path.join(renders_dir, name)
             else:
                 job.output_path = renders_dir
@@ -355,10 +404,13 @@ class SlaveClient:
                 count = len(self._active_renders)
             self.on_status_changed(f"rendering ({count} active)")
 
-        self._report_transfer(force=True, phase="rendering", project=job.project_name)
+        self._report_transfer(force=True, phase="rendering", project=job.project_name,
+                              render_pct=0)
         renderer.render(
             job,
             on_output=self.on_output,
+            on_progress=lambda p: self._report_transfer(
+                phase="rendering", project=job.project_name, render_pct=p),
         )
         self._report_transfer(force=True, phase="idle", project=job.project_name)
 
@@ -378,6 +430,10 @@ class SlaveClient:
             except Exception as e:
                 if self.on_output:
                     self.on_output(f"Worker {worker_id}: FFmpeg compose error: {e}")
+
+        # Upload the finished video to the master for review (best-effort)
+        if job.status == RenderStatus.COMPLETED.value:
+            self._upload_render(worker_id, job)
 
         # Report completion
         self._report_completion(job)
