@@ -1752,6 +1752,16 @@ class MainWindow(QMainWindow):
         self.edit_sync_dir.textChanged.connect(
             lambda t: self.config.set("farm_sync_dir", t))
 
+        self.chk_sync_prune = QCheckBox("Mirror exactly (delete files no longer in the project)")
+        self.chk_sync_prune.setToolTip(
+            "When syncing, delete files this machine previously synced that are no\n"
+            "longer part of the project, so the sync folder mirrors the latest send.\n"
+            "Only removes files added by syncing; other contents are left alone.")
+        self.chk_sync_prune.setChecked(self.config.get("farm_sync_prune", False))
+        self.chk_sync_prune.toggled.connect(
+            lambda v: self.config.set("farm_sync_prune", v))
+        sync_layout.addRow("", self.chk_sync_prune)
+
         layout.addWidget(sync_group)
 
         # Context menu (Windows-only feature: edits the Windows registry)
@@ -3207,6 +3217,7 @@ class MainWindow(QMainWindow):
         self.slave_client.render_enabled = self.chk_render_enabled.isChecked()
         self.slave_client.farm_renders_dir = self.config.get("farm_renders_dir", "")
         self.slave_client.sync_dir = self.config.get("farm_sync_dir", "")
+        self.slave_client.sync_prune = self.config.get("farm_sync_prune", False)
         self.slave_client.on_output = lambda msg: self.farm_log_signal.emit(f"[SLAVE] {msg}")
         self.slave_client.on_connected = lambda: (
             self.farm_status_signal.emit(f"Slave connected to {host}:{port}", "#a6e3a1"),
