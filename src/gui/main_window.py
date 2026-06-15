@@ -1752,14 +1752,18 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(widget)
         layout.setSpacing(12)
 
-        # Mode selection
+        # Mode selection — clean left-aligned grid form with even spacing
         mode_group = QGroupBox("Render Farm Mode")
-        mode_layout = QVBoxLayout(mode_group)
-        mode_layout.setContentsMargins(18, 20, 18, 18)
-        mode_layout.setSpacing(14)
+        mv = QVBoxLayout(mode_group)
+        mv.setContentsMargins(20, 22, 20, 20)
+        mv.setSpacing(14)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(13)
+        grid.setColumnStretch(1, 1)
+        _AL = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(10)
+        # --- Role buttons (left-aligned, equal width) ---
         self.btn_start_master = QPushButton("Start as Master")
         self.btn_start_master.setObjectName("primaryBtn")
         self.btn_start_master.setToolTip("Start this machine as the farm master that coordinates and dispatches jobs to slaves")
@@ -1767,10 +1771,6 @@ class MainWindow(QMainWindow):
         self.btn_stop_master.setObjectName("dangerBtn")
         self.btn_stop_master.setToolTip("Stop the master server and disconnect all slaves")
         self.btn_stop_master.setEnabled(False)
-        mode_row.addWidget(self.btn_start_master)
-        mode_row.addWidget(self.btn_stop_master)
-        mode_row.addSpacing(30)
-
         self.btn_start_slave = QPushButton("Start as Slave")
         self.btn_start_slave.setObjectName("primaryBtn")
         self.btn_start_slave.setToolTip("Connect to a master server as a render slave to receive and process jobs")
@@ -1778,57 +1778,66 @@ class MainWindow(QMainWindow):
         self.btn_stop_slave.setObjectName("dangerBtn")
         self.btn_stop_slave.setToolTip("Disconnect from the master server")
         self.btn_stop_slave.setEnabled(False)
-        mode_row.addWidget(self.btn_start_slave)
-        mode_row.addWidget(self.btn_stop_slave)
-        mode_row.addStretch()
-        mode_layout.addLayout(mode_row)
+        for b in (self.btn_start_master, self.btn_stop_master,
+                  self.btn_start_slave, self.btn_stop_slave):
+            b.setMinimumWidth(124)
+            b.setMinimumHeight(36)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addWidget(self.btn_start_master)
+        btn_row.addWidget(self.btn_stop_master)
+        btn_row.addSpacing(24)
+        btn_row.addWidget(self.btn_start_slave)
+        btn_row.addWidget(self.btn_stop_slave)
+        btn_row.addStretch()
+        mv.addLayout(btn_row)
+        mv.addLayout(grid)
 
-        # Connection settings
-        conn_row = QHBoxLayout()
-        conn_row.setSpacing(8)
-        conn_row.addWidget(QLabel("Master Host:"))
+        # --- Connection ---
         self.edit_master_host = QLineEdit()
         self.edit_master_host.setText(self.config.get("network_master_host", "localhost"))
-        self.edit_master_host.setFixedWidth(200)
+        self.edit_master_host.setMinimumWidth(240)
         self.edit_master_host.setToolTip("IP address or hostname of the master server.\nUse 'localhost' if master runs on this machine.")
-        conn_row.addWidget(self.edit_master_host)
-        conn_row.addWidget(QLabel("Port:"))
+        host_row = QHBoxLayout()
+        host_row.setSpacing(8)
+        host_row.addWidget(self.edit_master_host)
+        host_row.addStretch()
+        grid.addWidget(QLabel("Master Host:"), 1, 0, _AL)
+        grid.addLayout(host_row, 1, 1)
+
         self.spin_port = QSpinBox()
         self.spin_port.setRange(1024, 65535)
         self.spin_port.setValue(self.config.get("network_port", 5580))
-        self.spin_port.setFixedWidth(100)
+        self.spin_port.setFixedWidth(110)
         self.spin_port.setToolTip("Network port for master/slave communication (default: 5580)")
-        conn_row.addWidget(self.spin_port)
-        conn_row.addSpacing(10)
         self.btn_find_master = QPushButton("Find Master")
         self.btn_find_master.setToolTip("Scan local network for a running master server")
         self.btn_find_master.clicked.connect(self._find_master)
-        conn_row.addWidget(self.btn_find_master)
-        conn_row.addStretch()
-        self.lbl_farm_status = QLabel("Status: Not started")
-        self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
-        conn_row.addWidget(self.lbl_farm_status)
-        mode_layout.addLayout(conn_row)
+        port_row = QHBoxLayout()
+        port_row.setSpacing(10)
+        port_row.addWidget(self.spin_port)
+        port_row.addWidget(self.btn_find_master)
+        port_row.addStretch()
+        grid.addWidget(QLabel("Port:"), 2, 0, _AL)
+        grid.addLayout(port_row, 2, 1)
 
-        # Auto-send on its own row so the connection row can breathe
-        conn_row2 = QHBoxLayout()
-        conn_row2.setSpacing(8)
+        self.lbl_farm_status = QLabel("Not started")
+        self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
+        grid.addWidget(QLabel("Status:"), 3, 0, _AL)
+        grid.addWidget(self.lbl_farm_status, 3, 1, _AL)
+
+        # --- Options (each on its own left-aligned row) ---
         self.chk_auto_send_farm = QCheckBox("Auto-send new queue jobs to farm")
         self.chk_auto_send_farm.setToolTip("When enabled, jobs added to the local queue are automatically forwarded to the farm")
         self.chk_auto_send_farm.setChecked(self.config.get("auto_send_to_farm", False))
-        conn_row2.addWidget(self.chk_auto_send_farm)
-        conn_row2.addStretch()
-        mode_layout.addLayout(conn_row2)
+        grid.addWidget(self.chk_auto_send_farm, 4, 0, 1, 2)
 
-        # File transfer options
-        file_row = QHBoxLayout()
-        file_row.setSpacing(8)
         self.chk_send_project_files = QCheckBox("Send project files to farm")
         self.chk_send_project_files.setToolTip(
             "Upload the .moho project file to the master when submitting jobs.\n"
             "Use this when slave machines don't have the project file locally.")
         self.chk_send_project_files.setChecked(self.config.get("farm_send_project_files", False))
-        file_row.addWidget(self.chk_send_project_files)
+        grid.addWidget(self.chk_send_project_files, 5, 0, 1, 2)
 
         self.chk_send_sibling_files = QCheckBox("Include files from project folder")
         self.chk_send_sibling_files.setToolTip(
@@ -1836,7 +1845,7 @@ class MainWindow(QMainWindow):
             "Does NOT include subfolders.")
         self.chk_send_sibling_files.setChecked(self.config.get("farm_send_sibling_files", False))
         self.chk_send_sibling_files.setEnabled(self.chk_send_project_files.isChecked())
-        file_row.addWidget(self.chk_send_sibling_files)
+        grid.addWidget(self.chk_send_sibling_files, 6, 0, 1, 2)
 
         self.chk_send_parent_folder = QCheckBox("Include parent folder (preserve subfolders)")
         self.chk_send_parent_folder.setToolTip(
@@ -1846,8 +1855,7 @@ class MainWindow(QMainWindow):
             "on the slave. Overrides 'Include files from project folder'.")
         self.chk_send_parent_folder.setChecked(self.config.get("farm_send_parent_folder", False))
         self.chk_send_parent_folder.setEnabled(self.chk_send_project_files.isChecked())
-        file_row.addWidget(self.chk_send_parent_folder)
-        file_row.addStretch()
+        grid.addWidget(self.chk_send_parent_folder, 7, 0, 1, 2)
 
         self.chk_send_project_files.toggled.connect(self.chk_send_sibling_files.setEnabled)
         self.chk_send_project_files.toggled.connect(self.chk_send_parent_folder.setEnabled)
@@ -1857,12 +1865,8 @@ class MainWindow(QMainWindow):
             lambda v: self.config.set("farm_send_sibling_files", v))
         self.chk_send_parent_folder.toggled.connect(
             lambda v: self.config.set("farm_send_parent_folder", v))
-        mode_layout.addLayout(file_row)
 
-        # Optional explicit project root folder to bundle (preserves structure)
-        root_row = QHBoxLayout()
-        root_row.setSpacing(8)
-        root_row.addWidget(QLabel("Project root folder:"))
+        # --- Project root folder ---
         self.edit_project_root = QLineEdit()
         self.edit_project_root.setText(self.config.get("farm_project_root", ""))
         self.edit_project_root.setPlaceholderText(
@@ -1877,11 +1881,13 @@ class MainWindow(QMainWindow):
         self.btn_browse_project_root.clicked.connect(self._browse_project_root)
         self.btn_clear_project_root = QPushButton("Clear")
         self.btn_clear_project_root.clicked.connect(self.edit_project_root.clear)
+        root_row = QHBoxLayout()
+        root_row.setSpacing(8)
         root_row.addWidget(self.edit_project_root, 1)
         root_row.addWidget(self.btn_browse_project_root)
         root_row.addWidget(self.btn_clear_project_root)
-        mode_layout.addLayout(root_row)
-
+        grid.addWidget(QLabel("Project root:"), 8, 0, _AL)
+        grid.addLayout(root_row, 8, 1)
         self.edit_project_root.textChanged.connect(
             lambda t: self.config.set("farm_project_root", t))
         for _w in (self.edit_project_root, self.btn_browse_project_root,
@@ -1889,9 +1895,7 @@ class MainWindow(QMainWindow):
             _w.setEnabled(self.chk_send_project_files.isChecked())
             self.chk_send_project_files.toggled.connect(_w.setEnabled)
 
-        # Client sync folder status (this machine's render cache)
-        syncinfo_row = QHBoxLayout()
-        syncinfo_row.setSpacing(8)
+        # --- Client sync folder ---
         self.lbl_farm_sync_dir = QLabel()
         self.lbl_farm_sync_dir.setStyleSheet("color: #6b7280;")
         self.lbl_farm_sync_dir.setToolTip(
@@ -1903,24 +1907,23 @@ class MainWindow(QMainWindow):
         self.btn_check_sync_dir = QPushButton("Check")
         self.btn_check_sync_dir.setToolTip("Show how many files / how large the sync folder is")
         self.btn_check_sync_dir.clicked.connect(self._check_sync_folder)
-        syncinfo_row.addWidget(self.lbl_farm_sync_dir, 1)
-        syncinfo_row.addWidget(self.btn_check_sync_dir)
-        syncinfo_row.addWidget(self.btn_open_sync_dir)
-        mode_layout.addLayout(syncinfo_row)
+        sync_row = QHBoxLayout()
+        sync_row.setSpacing(8)
+        sync_row.addWidget(self.lbl_farm_sync_dir, 1)
+        sync_row.addWidget(self.btn_check_sync_dir)
+        sync_row.addWidget(self.btn_open_sync_dir)
+        grid.addWidget(QLabel("Client Sync:"), 9, 0, _AL)
+        grid.addLayout(sync_row, 9, 1)
         self._refresh_sync_dir_label()
 
-        # Render enabled option
-        render_row = QHBoxLayout()
-        render_row.setSpacing(8)
+        # --- Accept render jobs ---
         self.chk_render_enabled = QCheckBox("Accept render jobs from farm")
         self.chk_render_enabled.setToolTip(
             "When unchecked, this machine only submits jobs to the farm but does not render.\n"
             "Use this for remote animators who send projects but shouldn't render locally.")
         self.chk_render_enabled.setChecked(self.config.get("slave_render_enabled", True))
         self.chk_render_enabled.toggled.connect(self._on_render_enabled_toggled)
-        render_row.addWidget(self.chk_render_enabled)
-        render_row.addStretch()
-        mode_layout.addLayout(render_row)
+        grid.addWidget(self.chk_render_enabled, 10, 0, 1, 2)
 
         layout.addWidget(mode_group)
 
@@ -2104,7 +2107,11 @@ class MainWindow(QMainWindow):
         farm_log_layout.addWidget(self.farm_log)
         layout.addWidget(farm_log_group)
 
-        return widget
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
 
     # --- Transfers tab (client file/sync status, like a sync dashboard) ---
     def _create_transfers_tab(self):
@@ -3954,7 +3961,7 @@ class MainWindow(QMainWindow):
         self.btn_force_update_slaves.setEnabled(False)
         self.btn_start_farm_queue.setEnabled(False)
         self.btn_stop_farm_queue.setEnabled(False)
-        self.lbl_farm_status.setText("Status: Stopped")
+        self.lbl_farm_status.setText("Stopped")
         self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
         self.lbl_farm_stats.setText("Farm: not running")
         self.lbl_farm_total_time.setText("")
@@ -4247,7 +4254,7 @@ class MainWindow(QMainWindow):
         self.btn_start_slave.setEnabled(True)
         self.btn_stop_slave.setEnabled(False)
         self.btn_start_master.setEnabled(True)
-        self.lbl_farm_status.setText("Status: Stopped")
+        self.lbl_farm_status.setText("Stopped")
         self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
         self.lbl_farm_stats.setText("Farm: not running")
         self.lbl_farm_total_time.setText("")
