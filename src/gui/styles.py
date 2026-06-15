@@ -121,7 +121,8 @@ QPushButton {
     color: #33363b;
     border: 1px solid #d6d9de;
     border-radius: 9px;
-    padding: 7px 14px;
+    padding: 8px 16px;
+    min-height: 18px;
 }
 QPushButton:hover { background-color: #f3f4f6; }
 QPushButton:pressed { background-color: #e9ebee; }
@@ -284,6 +285,27 @@ QToolTip {
     border-radius: 6px;
     padding: 5px 8px;
 }
+
+/* ---------- Menu-bar popover ---------- */
+#popoverWindow { background: transparent; }
+#popoverCard {
+    background-color: #ffffff;
+    border: 1px solid #e3e6ea;
+    border-radius: 18px;
+}
+#popoverTitle { font-size: 15px; font-weight: 700; color: #1b1d21; }
+#popoverSub { color: #9aa0a8; font-size: 11px; }
+#popoverStatus { color: #6b7280; font-size: 12px; padding: 0 2px; }
+#popoverRow {
+    background-color: #ffffff;
+    border: 1px solid #ececf0;
+    border-radius: 14px;
+}
+#popoverRow:hover { background-color: #fafbfc; }
+#popoverRowTitle { font-weight: 600; color: #1b1d21; font-size: 13px; }
+#popoverRowSub { color: #9aa0a8; font-size: 11px; }
+#popoverGhost { background-color: transparent; border: none; border-radius: 16px; }
+#popoverGhost:hover { background-color: #f1f3f6; }
 """.replace("__CHECK_IMAGE__", _CHECK_IMAGE_PATH) \
    .replace('"Segoe UI", Arial, sans-serif', _UI_FONT) \
    .replace('"Cascadia Code", "Consolas", monospace', _MONO_FONT)

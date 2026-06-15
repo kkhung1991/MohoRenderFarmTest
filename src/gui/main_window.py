@@ -343,7 +343,7 @@ class EditSettingsDialog(QDialog):
         self.edit_output_dir.setPlaceholderText("Same folder as project file (default)")
         self.edit_output_dir.setToolTip("Folder where rendered files will be saved.\nLeave empty to render in the same folder as the project file.")
         browse_btn = QPushButton("Browse...")
-        browse_btn.setFixedWidth(browse_btn.sizeHint().width() + 10)
+        browse_btn.setFixedWidth(browse_btn.sizeHint().width() + 28)
         browse_btn.clicked.connect(self._browse_output_dir)
         out_row = QHBoxLayout()
         out_row.addWidget(self.edit_output_dir)
@@ -828,6 +828,34 @@ class EditSettingsDialog(QDialog):
         self.accept()
 
 
+class _Switch(QCheckBox):
+    """A small iOS/UniFi-style toggle switch (track + sliding knob)."""
+
+    def sizeHint(self):
+        return QSize(46, 26)
+
+    def hitButton(self, pos):
+        return self.contentsRect().contains(pos)
+
+    def paintEvent(self, _e):
+        from PyQt6.QtGui import QPainter, QColor
+        from PyQt6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        h = 24
+        w = 44
+        top = (self.height() - h) / 2
+        track = QRectF(0, top, w, h)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#006fff") if self.isChecked() else QColor("#d3d7dd"))
+        p.drawRoundedRect(track, h / 2, h / 2)
+        d = h - 6
+        x = track.right() - d - 3 if self.isChecked() else track.left() + 3
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(QRectF(x, top + 3, d, d))
+        p.end()
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -1155,9 +1183,10 @@ class MainWindow(QMainWindow):
         return icon
 
     def _setup_tray(self):
-        """Add a macOS menu-bar (system tray) icon with a quick-access menu."""
-        from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
+        """Add a macOS menu-bar icon with a custom UniFi-style popover."""
+        from PyQt6.QtWidgets import QSystemTrayIcon
         self.tray = None
+        self._popover = None
         self.setWindowIcon(self._make_app_icon(mask=False))
         try:
             if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -1168,30 +1197,185 @@ class MainWindow(QMainWindow):
         self.tray = QSystemTrayIcon(self)
         self.tray.setIcon(self._make_app_icon(mask=platform_utils.IS_MACOS))
         self.tray.setToolTip(APP_NAME)
-
-        menu = QMenu()
-        head = menu.addAction(f"{APP_NAME}  v{APP_VERSION}")
-        head.setEnabled(False)
-        menu.addSeparator()
-        self._tray_status = menu.addAction("Idle")
-        self._tray_status.setEnabled(False)
-        menu.addSeparator()
-        act_show = menu.addAction("Show Window")
-        act_show.triggered.connect(self._show_from_tray)
-        act_hide = menu.addAction("Hide Window")
-        act_hide.triggered.connect(self.hide)
-        menu.addSeparator()
-        act_quit = menu.addAction("Quit Moho Render Farm")
-        act_quit.triggered.connect(self._quit_app)
-        self.tray.setContextMenu(menu)
+        self._build_tray_popover()
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+
+    def _build_tray_popover(self):
+        """Create the floating popover shown from the menu-bar icon."""
+        pop = QWidget(None)
+        pop.setObjectName("popoverWindow")
+        pop.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+                           | Qt.WindowType.NoDropShadowWindowHint)
+        pop.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        outer = QVBoxLayout(pop)
+        outer.setContentsMargins(12, 12, 12, 12)  # room for the card's shadow gap
+
+        card = QFrame()
+        card.setObjectName("popoverCard")
+        card.setFixedWidth(340)
+        try:
+            from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+            from PyQt6.QtGui import QColor
+            shadow = QGraphicsDropShadowEffect(card)
+            shadow.setBlurRadius(30)
+            shadow.setXOffset(0)
+            shadow.setYOffset(7)
+            shadow.setColor(QColor(0, 0, 0, 65))
+            card.setGraphicsEffect(shadow)
+        except Exception:
+            pass
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(16, 16, 16, 16)
+        cl.setSpacing(12)
+
+        # Header: logo + name + settings gear
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        logo = QLabel()
+        logo.setPixmap(self._make_app_icon(mask=False).pixmap(34, 34))
+        head.addWidget(logo)
+        htext = QVBoxLayout()
+        htext.setSpacing(0)
+        name = QLabel(APP_NAME)
+        name.setObjectName("popoverTitle")
+        sub = QLabel(f"v{APP_VERSION}")
+        sub.setObjectName("popoverSub")
+        htext.addWidget(name)
+        htext.addWidget(sub)
+        head.addLayout(htext)
+        head.addStretch()
+        gear = QPushButton()
+        gear.setObjectName("popoverGhost")
+        gear.setIcon(self._make_nav_icon("gear", False))
+        gear.setIconSize(QSize(18, 18))
+        gear.setFixedSize(32, 32)
+        gear.setCursor(Qt.CursorShape.PointingHandCursor)
+        gear.setToolTip("Open settings")
+        gear.clicked.connect(lambda: (self._show_from_tray(), self._set_page(5),
+                                      self._popover.hide()))
+        head.addWidget(gear)
+        cl.addLayout(head)
+
+        # Status pill
+        self._pop_status = QLabel("Idle")
+        self._pop_status.setObjectName("popoverStatus")
+        cl.addWidget(self._pop_status)
+
+        # Master row (toggle)
+        self._sw_master = _Switch()
+        self._sw_master.toggled.connect(self._on_pop_master_toggled)
+        cl.addWidget(self._popover_row("nodes", "Master Server",
+                                       "Coordinate and dispatch jobs", self._sw_master))
+        # Slave row (toggle)
+        self._sw_slave = _Switch()
+        self._sw_slave.toggled.connect(self._on_pop_slave_toggled)
+        cl.addWidget(self._popover_row("transfers", "Render Slave",
+                                       "Connect to a master and render", self._sw_slave))
+
+        # Footer
+        foot = QHBoxLayout()
+        btn_open = QPushButton("Open App")
+        btn_open.setObjectName("primaryBtn")
+        btn_open.clicked.connect(lambda: (self._show_from_tray(), self._popover.hide()))
+        btn_quit = QPushButton("Quit")
+        btn_quit.clicked.connect(self._quit_app)
+        foot.addWidget(btn_open)
+        foot.addStretch()
+        foot.addWidget(btn_quit)
+        cl.addLayout(foot)
+
+        outer.addWidget(card)
+        self._popover = pop
+
+    def _popover_row(self, icon_kind, title, subtitle, trailing):
+        row = QFrame()
+        row.setObjectName("popoverRow")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(12, 10, 12, 10)
+        rl.setSpacing(10)
+        ic = QLabel()
+        ic.setPixmap(self._make_nav_icon(icon_kind, True).pixmap(22, 22))
+        rl.addWidget(ic)
+        tcol = QVBoxLayout()
+        tcol.setSpacing(1)
+        t = QLabel(title)
+        t.setObjectName("popoverRowTitle")
+        s = QLabel(subtitle)
+        s.setObjectName("popoverRowSub")
+        tcol.addWidget(t)
+        tcol.addWidget(s)
+        rl.addLayout(tcol)
+        rl.addStretch()
+        rl.addWidget(trailing)
+        return row
+
+    def _on_pop_master_toggled(self, on):
+        if on and not self.master_server:
+            self._start_master()
+        elif not on and self.master_server:
+            self._stop_master()
+        self._refresh_popover()
+
+    def _on_pop_slave_toggled(self, on):
+        if on and not self.slave_client:
+            self._start_slave()
+        elif not on and self.slave_client:
+            self._stop_slave()
+        self._refresh_popover()
+
+    def _refresh_popover(self):
+        if not getattr(self, "_popover", None):
+            return
+        master_on = self.master_server is not None
+        slave_on = self.slave_client is not None
+        rendering = (getattr(self, "queue", None) is not None
+                     and getattr(self.queue, "is_running", False))
+        for sw, state in ((self._sw_master, master_on), (self._sw_slave, slave_on)):
+            sw.blockSignals(True)
+            sw.setChecked(state)
+            sw.blockSignals(False)
+            sw.update()
+        if rendering:
+            txt = "Rendering…"
+        elif master_on and slave_on:
+            txt = "Master + Slave running"
+        elif master_on:
+            txt = "Master running"
+        elif slave_on:
+            txt = "Slave connected"
+        else:
+            txt = "Idle"
+        self._pop_status.setText(txt)
 
     def _on_tray_activated(self, reason):
         from PyQt6.QtWidgets import QSystemTrayIcon
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
+                      QSystemTrayIcon.ActivationReason.DoubleClick,
+                      QSystemTrayIcon.ActivationReason.Context):
+            self._show_tray_popover()
+
+    def _show_tray_popover(self):
+        if not getattr(self, "_popover", None):
             self._show_from_tray()
+            return
+        self._refresh_popover()
+        self._popover.adjustSize()
+        geo = self.tray.geometry()
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = self._popover.sizeHint().width() or 360
+        h = self._popover.sizeHint().height() or 240
+        if geo is not None and geo.width() > 0:
+            x = geo.center().x() - w // 2
+            y = geo.bottom() + 4
+        else:
+            x = screen.right() - w - 16
+            y = screen.top() + 8
+        x = max(screen.left() + 8, min(x, screen.right() - w - 8))
+        self._popover.move(x, y)
+        self._popover.show()
+        self._popover.raise_()
+        self._popover.activateWindow()
 
     def _show_from_tray(self):
         self.showNormal()
@@ -1199,16 +1383,7 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def _update_tray_status(self):
-        if not getattr(self, "_tray_status", None):
-            return
-        parts = []
-        if self.master_server:
-            parts.append("Master on")
-        if self.slave_client:
-            parts.append("Slave on")
-        if getattr(self, "queue", None) is not None and getattr(self.queue, "is_running", False):
-            parts.append("Rendering")
-        self._tray_status.setText(" · ".join(parts) if parts else "Idle")
+        self._refresh_popover()
 
     def _quit_app(self):
         try:
@@ -1340,7 +1515,7 @@ class MainWindow(QMainWindow):
         log_header = QHBoxLayout()
         log_header.addWidget(QLabel("Output Log"))
         self.btn_clear_log = QPushButton("Clear Log")
-        self.btn_clear_log.setFixedWidth(self.btn_clear_log.sizeHint().width() + 10)
+        self.btn_clear_log.setFixedWidth(self.btn_clear_log.sizeHint().width() + 28)
         log_header.addStretch()
         log_header.addWidget(self.btn_clear_log)
         log_layout.addLayout(log_header)
@@ -1410,7 +1585,7 @@ class MainWindow(QMainWindow):
         default_dir = self.config.get("default_output_dir", "") if self.config.get("default_output_mode", "project") == "custom" else ""
         self.edit_output_dir.setText(default_dir)
         browse_out = QPushButton("Browse...")
-        browse_out.setFixedWidth(browse_out.sizeHint().width() + 10)
+        browse_out.setFixedWidth(browse_out.sizeHint().width() + 28)
         browse_out.clicked.connect(self._browse_output_dir)
         out_row = QHBoxLayout()
         out_row.addWidget(self.edit_output_dir)
@@ -1575,12 +1750,16 @@ class MainWindow(QMainWindow):
     def _create_farm_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setSpacing(12)
 
         # Mode selection
         mode_group = QGroupBox("Render Farm Mode")
         mode_layout = QVBoxLayout(mode_group)
+        mode_layout.setContentsMargins(18, 20, 18, 18)
+        mode_layout.setSpacing(14)
 
         mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
         self.btn_start_master = QPushButton("Start as Master")
         self.btn_start_master.setObjectName("primaryBtn")
         self.btn_start_master.setToolTip("Start this machine as the farm master that coordinates and dispatches jobs to slaves")
@@ -1606,6 +1785,7 @@ class MainWindow(QMainWindow):
 
         # Connection settings
         conn_row = QHBoxLayout()
+        conn_row.setSpacing(8)
         conn_row.addWidget(QLabel("Master Host:"))
         self.edit_master_host = QLineEdit()
         self.edit_master_host.setText(self.config.get("network_master_host", "localhost"))
@@ -1624,21 +1804,25 @@ class MainWindow(QMainWindow):
         self.btn_find_master.setToolTip("Scan local network for a running master server")
         self.btn_find_master.clicked.connect(self._find_master)
         conn_row.addWidget(self.btn_find_master)
-        conn_row.addSpacing(20)
-
-        self.chk_auto_send_farm = QCheckBox("Auto-send new queue jobs to farm")
-        self.chk_auto_send_farm.setToolTip("When enabled, jobs added to the local queue are automatically forwarded to the farm")
-        self.chk_auto_send_farm.setChecked(self.config.get("auto_send_to_farm", False))
-        conn_row.addWidget(self.chk_auto_send_farm)
         conn_row.addStretch()
-
         self.lbl_farm_status = QLabel("Status: Not started")
         self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
         conn_row.addWidget(self.lbl_farm_status)
         mode_layout.addLayout(conn_row)
 
+        # Auto-send on its own row so the connection row can breathe
+        conn_row2 = QHBoxLayout()
+        conn_row2.setSpacing(8)
+        self.chk_auto_send_farm = QCheckBox("Auto-send new queue jobs to farm")
+        self.chk_auto_send_farm.setToolTip("When enabled, jobs added to the local queue are automatically forwarded to the farm")
+        self.chk_auto_send_farm.setChecked(self.config.get("auto_send_to_farm", False))
+        conn_row2.addWidget(self.chk_auto_send_farm)
+        conn_row2.addStretch()
+        mode_layout.addLayout(conn_row2)
+
         # File transfer options
         file_row = QHBoxLayout()
+        file_row.setSpacing(8)
         self.chk_send_project_files = QCheckBox("Send project files to farm")
         self.chk_send_project_files.setToolTip(
             "Upload the .moho project file to the master when submitting jobs.\n"
@@ -1677,6 +1861,7 @@ class MainWindow(QMainWindow):
 
         # Optional explicit project root folder to bundle (preserves structure)
         root_row = QHBoxLayout()
+        root_row.setSpacing(8)
         root_row.addWidget(QLabel("Project root folder:"))
         self.edit_project_root = QLineEdit()
         self.edit_project_root.setText(self.config.get("farm_project_root", ""))
@@ -1706,6 +1891,7 @@ class MainWindow(QMainWindow):
 
         # Client sync folder status (this machine's render cache)
         syncinfo_row = QHBoxLayout()
+        syncinfo_row.setSpacing(8)
         self.lbl_farm_sync_dir = QLabel()
         self.lbl_farm_sync_dir.setStyleSheet("color: #6b7280;")
         self.lbl_farm_sync_dir.setToolTip(
@@ -1725,6 +1911,7 @@ class MainWindow(QMainWindow):
 
         # Render enabled option
         render_row = QHBoxLayout()
+        render_row.setSpacing(8)
         self.chk_render_enabled = QCheckBox("Accept render jobs from farm")
         self.chk_render_enabled.setToolTip(
             "When unchecked, this machine only submits jobs to the farm but does not render.\n"
@@ -1875,7 +2062,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_completed_farm.setToolTip("Clear completed jobs from the farm queue")
         self.btn_clear_completed_farm.clicked.connect(self._clear_completed_farm_jobs)
         farm_controls.addWidget(self.btn_clear_completed_farm)
-        self.btn_force_update_slaves = QPushButton("Force Update Slaves")
+        self.btn_force_update_slaves = QPushButton("Update Slaves")
         self.btn_force_update_slaves.setToolTip(
             "Force all connected slaves to download the latest version and restart")
         self.btn_force_update_slaves.setEnabled(False)
@@ -1908,7 +2095,7 @@ class MainWindow(QMainWindow):
         log_header = QHBoxLayout()
         log_header.addStretch()
         self.btn_clear_farm_log = QPushButton("Clear")
-        self.btn_clear_farm_log.setFixedWidth(self.btn_clear_farm_log.sizeHint().width() + 10)
+        self.btn_clear_farm_log.setFixedWidth(self.btn_clear_farm_log.sizeHint().width() + 28)
         self.btn_clear_farm_log.clicked.connect(lambda: self.farm_log.clear())
         log_header.addWidget(self.btn_clear_farm_log)
         farm_log_layout.addLayout(log_header)
@@ -2348,7 +2535,7 @@ class MainWindow(QMainWindow):
             moho_tip = "Full path to the Moho executable on this machine"
         self.edit_moho_path.setToolTip(moho_tip)
         browse_moho = QPushButton("Browse...")
-        browse_moho.setFixedWidth(browse_moho.sizeHint().width() + 10)
+        browse_moho.setFixedWidth(browse_moho.sizeHint().width() + 28)
         browse_moho.clicked.connect(self._browse_moho)
         moho_row = QHBoxLayout()
         moho_row.addWidget(self.edit_moho_path)
@@ -2379,7 +2566,7 @@ class MainWindow(QMainWindow):
         self.edit_default_output.setPlaceholderText("No custom folder set")
         self.edit_default_output.setToolTip("Default folder for rendered output when using 'Custom folder' mode")
         browse_output = QPushButton("Browse...")
-        browse_output.setFixedWidth(browse_output.sizeHint().width() + 10)
+        browse_output.setFixedWidth(browse_output.sizeHint().width() + 28)
         browse_output.clicked.connect(self._browse_default_output)
         output_row = QHBoxLayout()
         output_row.addWidget(self.edit_default_output)
@@ -2410,7 +2597,7 @@ class MainWindow(QMainWindow):
             "Where farm-rendered files are saved on this machine when jobs use 'project folder' mode.\n"
             "Leave empty for default (Renders subfolder next to the app).")
         browse_farm_renders = QPushButton("Browse...")
-        browse_farm_renders.setFixedWidth(browse_farm_renders.sizeHint().width() + 10)
+        browse_farm_renders.setFixedWidth(browse_farm_renders.sizeHint().width() + 28)
         browse_farm_renders.clicked.connect(self._browse_farm_renders_dir)
         farm_render_row = QHBoxLayout()
         farm_render_row.addWidget(self.edit_farm_renders_dir)
@@ -2443,7 +2630,7 @@ class MainWindow(QMainWindow):
             "(compared by size + CRC), so large projects don't re-transfer every time.\n"
             "Leave empty to download a fresh temporary copy for each job.")
         browse_sync = QPushButton("Browse...")
-        browse_sync.setFixedWidth(browse_sync.sizeHint().width() + 10)
+        browse_sync.setFixedWidth(browse_sync.sizeHint().width() + 28)
         browse_sync.clicked.connect(self._browse_sync_dir)
         sync_row = QHBoxLayout()
         sync_row.addWidget(self.edit_sync_dir)
@@ -2474,7 +2661,7 @@ class MainWindow(QMainWindow):
             "Where the master stores finished videos uploaded by render clients.\n"
             "Browse and play these in the Renders tab. (Set before starting the master.)")
         browse_mr = QPushButton("Browse...")
-        browse_mr.setFixedWidth(browse_mr.sizeHint().width() + 10)
+        browse_mr.setFixedWidth(browse_mr.sizeHint().width() + 28)
         browse_mr.clicked.connect(self._browse_master_renders_dir)
         mr_row = QHBoxLayout()
         mr_row.addWidget(self.edit_master_renders_dir)
