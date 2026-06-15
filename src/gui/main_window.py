@@ -876,6 +876,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._connect_signals()
         self._setup_menu()
+        self._setup_tray()
         self.setAcceptDrops(True)
         self._start_ipc_server()
         self._init_cpu_monitor()
@@ -1003,6 +1004,107 @@ class MainWindow(QMainWindow):
             self.pages.setCurrentIndex(index)
             for j, b in enumerate(self._nav_buttons):
                 b.setChecked(j == index)
+
+    # ---- macOS menu-bar (system tray) icon ----
+    def _make_app_icon(self, mask=False):
+        """Build a simple play-in-rounded-square glyph as a QIcon.
+
+        mask=True returns a monochrome template icon (adapts to the macOS menu
+        bar light/dark); mask=False returns a colored icon for the window."""
+        from PyQt6.QtGui import QPixmap, QPainter, QColor, QPolygonF, QIcon
+        from PyQt6.QtCore import QPointF, QRectF
+        size = 44
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        frame = QColor("#e6e9f5" if mask else "#89b4fa")
+        p.setBrush(frame)
+        p.drawRoundedRect(QRectF(4, 4, size - 8, size - 8), 11, 11)
+        tri = QPolygonF([QPointF(17, 14), QPointF(32, 22), QPointF(17, 30)])
+        if mask:
+            # Punch the triangle out so the template reads as "play in a box"
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            p.setBrush(QColor(0, 0, 0))
+            p.drawPolygon(tri)
+        else:
+            p.setBrush(QColor("#ffffff"))
+            p.drawPolygon(tri)
+        p.end()
+        icon = QIcon(pm)
+        if mask:
+            try:
+                icon.setIsMask(True)
+            except Exception:
+                pass
+        return icon
+
+    def _setup_tray(self):
+        """Add a macOS menu-bar (system tray) icon with a quick-access menu."""
+        from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
+        self.tray = None
+        self.setWindowIcon(self._make_app_icon(mask=False))
+        try:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                return
+        except Exception:
+            return
+        from src.utils import platform_utils
+        self.tray = QSystemTrayIcon(self)
+        self.tray.setIcon(self._make_app_icon(mask=platform_utils.IS_MACOS))
+        self.tray.setToolTip(APP_NAME)
+
+        menu = QMenu()
+        head = menu.addAction(f"{APP_NAME}  v{APP_VERSION}")
+        head.setEnabled(False)
+        menu.addSeparator()
+        self._tray_status = menu.addAction("Idle")
+        self._tray_status.setEnabled(False)
+        menu.addSeparator()
+        act_show = menu.addAction("Show Window")
+        act_show.triggered.connect(self._show_from_tray)
+        act_hide = menu.addAction("Hide Window")
+        act_hide.triggered.connect(self.hide)
+        menu.addSeparator()
+        act_quit = menu.addAction("Quit Moho Render Farm")
+        act_quit.triggered.connect(self._quit_app)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.show()
+
+    def _on_tray_activated(self, reason):
+        from PyQt6.QtWidgets import QSystemTrayIcon
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._show_from_tray()
+
+    def _show_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _update_tray_status(self):
+        if not getattr(self, "_tray_status", None):
+            return
+        parts = []
+        if self.master_server:
+            parts.append("Master on")
+        if self.slave_client:
+            parts.append("Slave on")
+        if getattr(self, "queue", None) is not None and getattr(self.queue, "is_running", False):
+            parts.append("Rendering")
+        self._tray_status.setText(" · ".join(parts) if parts else "Idle")
+
+    def _quit_app(self):
+        try:
+            if self.master_server:
+                self.master_server.stop()
+            if self.slave_client:
+                self.slave_client.stop()
+        except Exception:
+            pass
+        QApplication.instance().quit()
 
     def _create_queue_tab(self):
         widget = QWidget()
@@ -5128,6 +5230,7 @@ class MainWindow(QMainWindow):
 
     def _update_cpu_usage(self):
         """Calculate and display current CPU usage from sample deltas."""
+        self._update_tray_status()
         current = self._read_cpu_times()
         if current is None:
             return  # counters unavailable on this platform; leave bar as-is
