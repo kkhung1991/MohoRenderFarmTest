@@ -944,74 +944,39 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- Far-left icon rail (UniFi-style) ----
-        rail = QWidget()
-        rail.setObjectName("iconRail")
-        rail.setFixedWidth(64)
-        rl = QVBoxLayout(rail)
-        rl.setContentsMargins(10, 16, 10, 16)
-        rl.setSpacing(8)
-        logo = QLabel()
-        logo.setPixmap(self._make_app_icon(mask=False).pixmap(28, 28))
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        rl.addWidget(logo)
-        rl.addSpacing(8)
-        self._rail_box = QVBoxLayout()
-        self._rail_box.setSpacing(6)
-        rl.addLayout(self._rail_box)
-        rl.addStretch(1)
-        root.addWidget(rail)
+        # ---- Collapsible left sidebar (icon-only <-> full menu) ----
+        self._nav_expanded = bool(self.config.get("nav_expanded", False))
+        self._nav_collapsed_w = 66
+        self._nav_expanded_w = 216
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        self._sidebar = sidebar
+        sb = QVBoxLayout(sidebar)
+        sb.setContentsMargins(11, 14, 11, 14)
+        sb.setSpacing(6)
 
-        # ---- Secondary nav panel ----
-        navp = QWidget()
-        navp.setObjectName("navPanel")
-        navp.setFixedWidth(210)
-        nv = QVBoxLayout(navp)
-        nv.setContentsMargins(14, 18, 14, 14)
-        nv.setSpacing(4)
-        brand = QLabel(APP_NAME)
-        brand.setObjectName("brandLabel")
-        brand.setWordWrap(True)
-        nv.addWidget(brand)
-        ver = QLabel(f"v{APP_VERSION}")
-        ver.setObjectName("brandVersion")
-        nv.addWidget(ver)
-        nv.addSpacing(12)
-        self.nav_search = QLineEdit()
-        self.nav_search.setObjectName("navSearch")
-        self.nav_search.setPlaceholderText("Search")
-        self.nav_search.setClearButtonEnabled(True)
-        self.nav_search.textChanged.connect(self._filter_nav)
-        nv.addWidget(self.nav_search)
-        nv.addSpacing(8)
+        self.btn_nav_toggle = QPushButton()
+        self.btn_nav_toggle.setObjectName("navToggle")
+        self.btn_nav_toggle.setIcon(self._make_nav_icon("menu", False))
+        self.btn_nav_toggle.setIconSize(QSize(20, 20))
+        self.btn_nav_toggle.setFixedHeight(40)
+        self.btn_nav_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_nav_toggle.setToolTip("Expand / collapse menu")
+        self.btn_nav_toggle.clicked.connect(self._toggle_nav)
+        sb.addWidget(self.btn_nav_toggle)
+        sb.addSpacing(8)
+
         self._nav_box = QVBoxLayout()
-        self._nav_box.setSpacing(3)
-        nv.addLayout(self._nav_box)
-        nv.addStretch(1)
-
-        sep = QFrame()
-        sep.setObjectName("sidebarSep")
-        sep.setFrameShape(QFrame.Shape.HLine)
-        nv.addWidget(sep)
-        status_cap = QLabel("STATUS")
-        status_cap.setObjectName("sidebarCaption")
-        nv.addWidget(status_cap)
-        self.global_progress = QProgressBar()
-        self.global_progress.setFormat("%v/%m jobs")
-        nv.addWidget(self.global_progress)
-        self.cpu_progress = QProgressBar()
-        self.cpu_progress.setRange(0, 100)
-        self.cpu_progress.setValue(0)
-        self.cpu_progress.setFormat("CPU %v%")
-        self.cpu_progress.setObjectName("cpuBar")
-        nv.addWidget(self.cpu_progress)
-        root.addWidget(navp)
+        self._nav_box.setSpacing(4)
+        sb.addLayout(self._nav_box)
+        sb.addStretch(1)
+        root.addWidget(sidebar)
 
         # ---- Content area (stacked pages) ----
         content = QWidget()
         content.setObjectName("content")
         cl = QVBoxLayout(content)
-        cl.setContentsMargins(18, 16, 18, 8)
+        cl.setContentsMargins(20, 16, 20, 8)
         cl.setSpacing(0)
         self.pages = QStackedWidget()
         cl.addWidget(self.pages)
@@ -1020,7 +985,6 @@ class MainWindow(QMainWindow):
         # Pages (each was previously a tab)
         self._page_names = []
         self._nav_buttons = []
-        self._rail_buttons = []
         self._nav_kinds = []
         self._add_page("Render Queue", self._create_queue_tab(), "list")
         self._add_page("Render Settings", self._create_settings_tab(), "sliders")
@@ -1031,35 +995,35 @@ class MainWindow(QMainWindow):
 
         self.pages.currentChanged.connect(self._on_tab_changed)
         self._set_page(0)
+        self._apply_nav_state()
 
-        # Status bar
+        # Status bar with live job + CPU indicators
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
+        self.global_progress = QProgressBar()
+        self.global_progress.setFormat("%v/%m jobs")
+        self.global_progress.setFixedWidth(150)
+        self.cpu_progress = QProgressBar()
+        self.cpu_progress.setRange(0, 100)
+        self.cpu_progress.setValue(0)
+        self.cpu_progress.setFormat("CPU %v%")
+        self.cpu_progress.setObjectName("cpuBar")
+        self.cpu_progress.setFixedWidth(120)
+        self.status_bar.addPermanentWidget(self.global_progress)
+        self.status_bar.addPermanentWidget(self.cpu_progress)
 
     def _add_page(self, name, widget, kind="list"):
-        """Add a content page with a matching icon-rail button and nav-panel row."""
+        """Add a content page with a matching collapsible-sidebar nav button."""
         idx = self.pages.addWidget(widget)
         self._page_names.append(name)
         self._nav_kinds.append(kind)
 
-        rb = QPushButton()
-        rb.setObjectName("railButton")
-        rb.setCheckable(True)
-        rb.setToolTip(name)
-        rb.setCursor(Qt.CursorShape.PointingHandCursor)
-        rb.setIconSize(QSize(22, 22))
-        rb.setFixedSize(44, 40)
-        rb.setIcon(self._make_nav_icon(kind, False))
-        rb.clicked.connect(lambda _c=False, i=idx: self._set_page(i))
-        self._rail_box.addWidget(rb, alignment=Qt.AlignmentFlag.AlignHCenter)
-        self._rail_buttons.append(rb)
-
-        nb = QPushButton(name)
+        nb = QPushButton()
         nb.setObjectName("navButton")
         nb.setCheckable(True)
         nb.setCursor(Qt.CursorShape.PointingHandCursor)
-        nb.setIconSize(QSize(18, 18))
+        nb.setIconSize(QSize(20, 20))
         nb.setIcon(self._make_nav_icon(kind, False))
         nb.clicked.connect(lambda _c=False, i=idx: self._set_page(i))
         self._nav_box.addWidget(nb)
@@ -1067,23 +1031,74 @@ class MainWindow(QMainWindow):
         return idx
 
     def _set_page(self, index):
-        """Switch the visible page and highlight its rail + nav buttons."""
+        """Switch the visible page and highlight its nav button."""
         if not (0 <= index < self.pages.count()):
             return
         self.pages.setCurrentIndex(index)
         for j in range(len(self._nav_buttons)):
             active = (j == index)
             self._nav_buttons[j].setChecked(active)
-            self._rail_buttons[j].setChecked(active)
-            icon = self._make_nav_icon(self._nav_kinds[j], active)
-            self._nav_buttons[j].setIcon(icon)
-            self._rail_buttons[j].setIcon(icon)
+            self._nav_buttons[j].setIcon(self._make_nav_icon(self._nav_kinds[j], active))
+
+    def _toggle_nav(self):
+        """Expand the sidebar to full menu, or collapse it to icons only."""
+        self._nav_expanded = not self._nav_expanded
+        self.config.set("nav_expanded", self._nav_expanded)
+        self._apply_nav_state()
+
+    def _apply_nav_state(self):
+        """Show icon+label (expanded) or icon-only (collapsed) nav buttons."""
+        expanded = bool(getattr(self, "_nav_expanded", False))
+        self._sidebar.setFixedWidth(
+            self._nav_expanded_w if expanded else self._nav_collapsed_w)
+        for nb, name in zip(self._nav_buttons, self._page_names):
+            nb.setText(("  " + name) if expanded else "")
+            nb.setToolTip("" if expanded else name)
+            nb.setProperty("collapsed", "false" if expanded else "true")
+            nb.style().unpolish(nb)
+            nb.style().polish(nb)
+        self.btn_nav_toggle.setProperty(
+            "collapsed", "false" if expanded else "true")
+        self.btn_nav_toggle.style().unpolish(self.btn_nav_toggle)
+        self.btn_nav_toggle.style().polish(self.btn_nav_toggle)
 
     def _filter_nav(self, text):
-        """Hide nav-panel rows that don't match the search text."""
+        """Hide nav rows that don't match the search text."""
         t = (text or "").strip().lower()
         for nb, name in zip(self._nav_buttons, self._page_names):
             nb.setVisible(t in name.lower())
+
+    def _make_collapsible(self, title, content, expanded=True, action=None):
+        """Wrap a widget in a stacked, collapsible section with a header toggle."""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        header = QPushButton()
+        header.setObjectName("collapseHeader")
+        header.setCheckable(True)
+        header.setCursor(Qt.CursorShape.PointingHandCursor)
+        head.addWidget(header)
+        head.addStretch()
+        if action is not None:
+            head.addWidget(action)
+        v.addLayout(head)
+        v.addWidget(content)
+
+        def _apply(checked):
+            header.setText(("▾  " if checked else "▸  ") + title)
+            content.setVisible(checked)
+            if action is not None:
+                action.setVisible(checked)
+
+        header.toggled.connect(_apply)
+        header.setChecked(expanded)
+        _apply(header.isChecked())
+        return box
 
     def _make_nav_icon(self, kind, active=False):
         """Draw a simple line glyph for a nav section (grey, or blue when active)."""
@@ -1106,6 +1121,9 @@ class MainWindow(QMainWindow):
         if kind == "list":
             for y in (15, 22, 29):
                 p.drawLine(13, y, 31, y)
+        elif kind == "menu":
+            for y in (16, 22, 28):
+                p.drawLine(14, y, 30, y)
         elif kind == "sliders":
             ys = (15, 22, 29)
             knob = (29, 17, 25)
@@ -1149,30 +1167,41 @@ class MainWindow(QMainWindow):
 
     # ---- macOS menu-bar (system tray) icon ----
     def _make_app_icon(self, mask=False):
-        """Build a simple play-in-rounded-square glyph as a QIcon.
+        """Build the grey Moho 'm' mark in a rounded box (no outline) as a QIcon.
 
         mask=True returns a monochrome template icon (adapts to the macOS menu
-        bar light/dark); mask=False returns a colored icon for the window."""
-        from PyQt6.QtGui import QPixmap, QPainter, QColor, QPolygonF, QIcon
-        from PyQt6.QtCore import QPointF, QRectF
+        bar light/dark); mask=False returns the grey app icon for the window."""
+        from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QFont
+        from PyQt6.QtCore import QRectF
         size = 44
         pm = QPixmap(size, size)
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        frame = QColor("#e6e9f5" if mask else "#006fff")
-        p.setBrush(frame)
-        p.drawRoundedRect(QRectF(4, 4, size - 8, size - 8), 11, 11)
-        tri = QPolygonF([QPointF(17, 14), QPointF(32, 22), QPointF(17, 30)])
+        box = QRectF(3, 3, size - 6, size - 6)
+
+        font = QFont(self.font())
+        font.setBold(True)
+        font.setPixelSize(30)
+        p.setFont(font)
+        # Lowercase Moho wordmark glyph, optically centred in the box.
+        glyph_rect = box.adjusted(0, -1, 0, -1)
+
         if mask:
-            # Punch the triangle out so the template reads as "play in a box"
-            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            # Template: filled rounded box with the 'm' punched out.
             p.setBrush(QColor(0, 0, 0))
-            p.drawPolygon(tri)
+            p.drawRoundedRect(box, 11, 11)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            p.setPen(QColor(0, 0, 0))
+            p.drawText(glyph_rect, Qt.AlignmentFlag.AlignCenter, "m")
         else:
-            p.setBrush(QColor("#ffffff"))
-            p.drawPolygon(tri)
+            # Light-grey rounded box, no outline, with a darker grey 'm'.
+            p.setBrush(QColor("#e8eaef"))
+            p.drawRoundedRect(box, 11, 11)
+            p.setPen(QColor("#5f6671"))
+            p.drawText(glyph_rect, Qt.AlignmentFlag.AlignCenter, "m")
         p.end()
         icon = QIcon(pm)
         if mask:
@@ -1399,9 +1428,6 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        # Splitter: queue table + log
-        splitter = QSplitter(Qt.Orientation.Vertical)
-
         # Top: Queue controls + table
         top_widget = QWidget()
         top_layout = QVBoxLayout(top_widget)
@@ -1488,10 +1514,10 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(True)
         self.queue_table.setColumnWidth(0, 80)    # Status
         self.queue_table.setColumnWidth(1, 200)   # Project
-        self.queue_table.setColumnWidth(2, 55)    # Format
-        self.queue_table.setColumnWidth(3, 90)    # Layer Comp
+        self.queue_table.setColumnWidth(2, 72)    # Format
+        self.queue_table.setColumnWidth(3, 100)   # Layer Comp
         self.queue_table.setColumnWidth(4, 200)   # Output
-        self.queue_table.setColumnWidth(5, 65)    # Progress
+        self.queue_table.setColumnWidth(5, 82)    # Progress
         self.queue_table.setColumnWidth(6, 75)    # Time
         self.queue_table.setColumnWidth(7, 75)    # Slave
         self.queue_table.setColumnWidth(8, 120)   # Preset
@@ -1505,35 +1531,23 @@ class MainWindow(QMainWindow):
         self.queue_table.cellClicked.connect(self._on_queue_cell_clicked)
         top_layout.addWidget(self.queue_table)
 
-        splitter.addWidget(top_widget)
+        layout.addWidget(top_widget, 1)
 
-        # Bottom: Log output
-        log_widget = QWidget()
-        log_layout = QVBoxLayout(log_widget)
-        log_layout.setContentsMargins(0, 0, 0, 0)
-
-        log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("Output Log"))
+        # Stacked, collapsible Output Log
         self.btn_clear_log = QPushButton("Clear Log")
         self.btn_clear_log.setFixedWidth(self.btn_clear_log.sizeHint().width() + 28)
-        log_header.addStretch()
-        log_header.addWidget(self.btn_clear_log)
-        log_layout.addLayout(log_header)
-
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(200)
-        log_layout.addWidget(self.log_output)
-
-        splitter.addWidget(log_widget)
-        splitter.setSizes([500, 200])
-
-        layout.addWidget(splitter)
+        self.log_output.setMinimumHeight(150)
+        self.log_output.setMaximumHeight(220)
+        layout.addWidget(self._make_collapsible(
+            "Output Log", self.log_output, expanded=True, action=self.btn_clear_log))
         return widget
 
     def _create_settings_tab(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -1927,10 +1941,9 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(mode_group)
 
-        # Horizontal splitter: Slaves + Farm Queue
-        farm_splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Stacked vertically (no horizontal scroll / cropping): Slaves + Farm Queue
 
-        # Left: Connected Slaves
+        # Top: Connected Slaves
         slaves_widget = QWidget()
         slaves_layout = QVBoxLayout(slaves_widget)
         slaves_layout.setContentsMargins(0, 0, 0, 0)
@@ -1945,16 +1958,17 @@ class MainWindow(QMainWindow):
         sl_header.setStretchLastSection(True)
         self.slaves_table.setColumnWidth(0, 120)
         self.slaves_table.setColumnWidth(1, 120)
-        self.slaves_table.setColumnWidth(2, 70)
+        self.slaves_table.setColumnWidth(2, 72)
         self.slaves_table.setColumnWidth(3, 200)
-        self.slaves_table.setColumnWidth(4, 75)
-        self.slaves_table.setColumnWidth(5, 60)
-        self.slaves_table.setColumnWidth(6, 60)
+        self.slaves_table.setColumnWidth(4, 92)
+        self.slaves_table.setColumnWidth(5, 70)
+        self.slaves_table.setColumnWidth(6, 70)
         self.slaves_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.slaves_table.setAlternatingRowColors(True)
         self.slaves_table.verticalHeader().setVisible(False)
         self.slaves_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.slaves_table.customContextMenuRequested.connect(self._show_slave_context_menu)
+        self.slaves_table.setMinimumHeight(210)
         slaves_layout.addWidget(self.slaves_table)
 
         # Left (slave mode): Slave Status info panel
@@ -1993,13 +2007,13 @@ class MainWindow(QMainWindow):
         slave_info_layout.addWidget(slave_info_group)
         slave_info_layout.addStretch()
 
-        # QStackedWidget for left panel: page 0 = slaves table, page 1 = slave info
+        # QStackedWidget for top panel: page 0 = slaves table, page 1 = slave info
         self.farm_left_stack = QStackedWidget()
         self.farm_left_stack.addWidget(slaves_widget)
         self.farm_left_stack.addWidget(slave_info_widget)
-        farm_splitter.addWidget(self.farm_left_stack)
+        layout.addWidget(self.farm_left_stack)
 
-        # Right: Farm Queue
+        # Bottom: Farm Queue
         farm_queue_widget = QWidget()
         farm_queue_layout = QVBoxLayout(farm_queue_widget)
         farm_queue_layout.setContentsMargins(0, 0, 0, 0)
@@ -2014,9 +2028,9 @@ class MainWindow(QMainWindow):
         fq_header.setStretchLastSection(True)
         self.farm_queue_table.setColumnWidth(0, 90)    # Status
         self.farm_queue_table.setColumnWidth(1, 200)   # Project
-        self.farm_queue_table.setColumnWidth(2, 55)    # Format
-        self.farm_queue_table.setColumnWidth(3, 120)   # Assigned Slave
-        self.farm_queue_table.setColumnWidth(4, 65)    # Progress
+        self.farm_queue_table.setColumnWidth(2, 72)    # Format
+        self.farm_queue_table.setColumnWidth(3, 130)   # Assigned Slave
+        self.farm_queue_table.setColumnWidth(4, 82)    # Progress
         self.farm_queue_table.setColumnWidth(5, 75)    # Time
         self.farm_queue_table.setColumnWidth(6, 150)   # Output
         self.farm_queue_table.setColumnHidden(7, True)  # ID hidden
@@ -2026,11 +2040,9 @@ class MainWindow(QMainWindow):
         self.farm_queue_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.farm_queue_table.customContextMenuRequested.connect(self._show_farm_queue_context_menu)
         self.farm_queue_table.cellClicked.connect(self._on_farm_queue_cell_clicked)
+        self.farm_queue_table.setMinimumHeight(210)
         farm_queue_layout.addWidget(self.farm_queue_table)
-        farm_splitter.addWidget(farm_queue_widget)
-
-        farm_splitter.setSizes([400, 600])
-        layout.addWidget(farm_splitter)
+        layout.addWidget(farm_queue_widget)
 
         # Farm queue controls
         farm_controls = QHBoxLayout()
@@ -2092,23 +2104,20 @@ class MainWindow(QMainWindow):
         stats_layout.addWidget(self.lbl_farm_total_time)
         layout.addLayout(stats_layout)
 
-        # Farm log
-        farm_log_group = QGroupBox("Farm Log")
-        farm_log_layout = QVBoxLayout(farm_log_group)
-        log_header = QHBoxLayout()
-        log_header.addStretch()
+        # Stacked, collapsible Farm Log
         self.btn_clear_farm_log = QPushButton("Clear")
         self.btn_clear_farm_log.setFixedWidth(self.btn_clear_farm_log.sizeHint().width() + 28)
         self.btn_clear_farm_log.clicked.connect(lambda: self.farm_log.clear())
-        log_header.addWidget(self.btn_clear_farm_log)
-        farm_log_layout.addLayout(log_header)
         self.farm_log = QTextEdit()
         self.farm_log.setReadOnly(True)
-        farm_log_layout.addWidget(self.farm_log)
-        layout.addWidget(farm_log_group)
+        self.farm_log.setMinimumHeight(150)
+        self.farm_log.setMaximumHeight(240)
+        layout.addWidget(self._make_collapsible(
+            "Farm Log", self.farm_log, expanded=True, action=self.btn_clear_farm_log))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setWidget(widget)
         return scroll
@@ -2519,6 +2528,7 @@ class MainWindow(QMainWindow):
     def _create_app_settings_tab(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         widget = QWidget()
         layout = QVBoxLayout(widget)
