@@ -1167,41 +1167,66 @@ class MainWindow(QMainWindow):
 
     # ---- macOS menu-bar (system tray) icon ----
     def _make_app_icon(self, mask=False):
-        """Build the grey Moho 'm' mark in a rounded box (no outline) as a QIcon.
+        """Build the grey Moho 'm.' mark in a rounded box (no outline) as a QIcon.
 
-        mask=True returns a monochrome template icon (adapts to the macOS menu
-        bar light/dark); mask=False returns the grey app icon for the window."""
-        from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QFont
-        from PyQt6.QtCore import QRectF
-        size = 44
-        pm = QPixmap(size, size)
+        Recreates Moho's playful lowercase 'm.' wordmark (hooked first stroke,
+        two bouncy humps, trailing dot). mask=True returns a monochrome template
+        icon (adapts to the macOS menu bar); mask=False returns the grey app
+        icon for the window / popover."""
+        from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QPen, QPainterPath
+        from PyQt6.QtCore import QRectF, QPointF
+        base = 44
+        ss = 6  # supersample for crisp scaling to any display size
+        pm = QPixmap(base * ss, base * ss)
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        box = QRectF(3, 3, size - 6, size - 6)
+        p.scale(ss, ss)
+        box = QRectF(3, 3, base - 6, base - 6)
 
-        font = QFont(self.font())
-        font.setBold(True)
-        font.setPixelSize(30)
-        p.setFont(font)
-        # Lowercase Moho wordmark glyph, optically centred in the box.
-        glyph_rect = box.adjusted(0, -1, 0, -1)
+        # Centerline of the brushed "m" (hook -> leg1 -> hump -> leg2 -> hump -> leg3)
+        m = QPainterPath()
+        m.moveTo(17.2, 13.0)
+        m.cubicTo(13.4, 10.4, 10.0, 12.6, 11.7, 16.4)   # leftward hook into stem top
+        m.cubicTo(12.5, 20.6, 12.8, 24.8, 13.5, 29.0)   # leg 1 down to foot 1
+        m.cubicTo(14.3, 23.1, 15.8, 17.9, 17.95, 17.8)  # rise to hump 1
+        m.cubicTo(20.1, 17.7, 21.2, 23.0, 22.0, 29.0)   # leg 2 down to foot 2
+        m.cubicTo(22.8, 23.1, 24.3, 17.9, 26.45, 17.8)  # rise to hump 2
+        m.cubicTo(28.6, 17.7, 29.8, 23.5, 30.7, 28.8)   # leg 3 down to foot 3
+        dot_c = QPointF(35.0, 28.6)
+        dot_r = 2.6
+
+        stroke = QPen()
+        stroke.setWidthF(4.4)
+        stroke.setCapStyle(Qt.PenCapStyle.RoundCap)
+        stroke.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
         if mask:
-            # Template: filled rounded box with the 'm' punched out.
+            # Template: filled rounded box with the mark punched out.
+            p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(0, 0, 0))
             p.drawRoundedRect(box, 11, 11)
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-            p.setPen(QColor(0, 0, 0))
-            p.drawText(glyph_rect, Qt.AlignmentFlag.AlignCenter, "m")
+            stroke.setColor(QColor(0, 0, 0))
+            p.setPen(stroke)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(m)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0))
+            p.drawEllipse(dot_c, dot_r, dot_r)
         else:
-            # Light-grey rounded box, no outline, with a darker grey 'm'.
+            # Light-grey rounded box, no outline, with the darker grey mark.
+            mark = QColor("#5f6671")
+            p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor("#e8eaef"))
             p.drawRoundedRect(box, 11, 11)
-            p.setPen(QColor("#5f6671"))
-            p.drawText(glyph_rect, Qt.AlignmentFlag.AlignCenter, "m")
+            stroke.setColor(mark)
+            p.setPen(stroke)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(m)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(mark)
+            p.drawEllipse(dot_c, dot_r, dot_r)
         p.end()
         icon = QIcon(pm)
         if mask:
