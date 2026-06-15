@@ -415,6 +415,86 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
 QScrollBar::handle:horizontal { background: #45475a; border-radius: 5px; min-width: 28px; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+
+/* ===================== Mac glass / minimalist refinement ===================== */
+#content {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #20202f, stop:1 #16161e);
+}
+#sidebar {
+    background-color: rgba(14, 14, 20, 0.92);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+QGroupBox {
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 16px;
+    margin-top: 16px;
+    padding-top: 10px;
+    background-color: rgba(255, 255, 255, 0.04);
+}
+QGroupBox::title { color: #89b4fa; left: 14px; }
+QPushButton {
+    border-radius: 11px;
+    padding: 8px 16px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    color: #cdd6f4;
+}
+QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); }
+QPushButton:pressed { background-color: rgba(255, 255, 255, 0.16); }
+QPushButton:disabled { background-color: rgba(255, 255, 255, 0.03); color: #6c7086;
+    border-color: rgba(255, 255, 255, 0.05); }
+QPushButton#primaryBtn { background-color: #89b4fa; border: none; color: #0b1020; font-weight: 600; }
+QPushButton#primaryBtn:hover { background-color: #a6c8ff; }
+QPushButton#dangerBtn { background-color: #f38ba8; border: none; color: #2a0e16; font-weight: 600; }
+QPushButton#dangerBtn:hover { background-color: #f7a3bb; }
+QPushButton#navButton {
+    border-radius: 10px;
+    padding: 11px 12px;
+    border-left: 3px solid transparent;
+    background-color: transparent;
+}
+QPushButton#navButton:hover { background-color: rgba(255, 255, 255, 0.06); }
+QPushButton#navButton:checked {
+    background-color: rgba(137, 180, 250, 0.16);
+    border-left: 3px solid #89b4fa;
+    color: #ffffff;
+}
+QLineEdit, QComboBox, QSpinBox {
+    border-radius: 10px;
+    padding: 8px 10px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    color: #cdd6f4;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 1px solid #89b4fa;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+QTableWidget, QListWidget {
+    border-radius: 14px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+}
+QHeaderView::section {
+    background-color: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 6px;
+    color: #a6adc8;
+}
+QTextEdit, QPlainTextEdit { border-radius: 14px; border: 1px solid rgba(255,255,255,0.07); }
+QProgressBar { border-radius: 8px; background-color: rgba(255, 255, 255, 0.08); }
+QProgressBar::chunk { border-radius: 8px; }
+QMenu {
+    background-color: #20202e;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 12px;
+    padding: 6px;
+}
+QMenu::item { padding: 7px 18px; border-radius: 7px; }
+QMenu::item:selected { background-color: rgba(137, 180, 250, 0.20); }
+QMenu::separator { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 8px; }
 """.replace("__CHECK_IMAGE__", _CHECK_IMAGE_PATH) \
    .replace('"Segoe UI", Arial, sans-serif', _UI_FONT) \
    .replace('"Cascadia Code", "Consolas", monospace', _MONO_FONT)
