@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QInputDialog, QScrollArea, QStackedWidget,
     QListWidget, QListWidgetItem, QSlider, QFrame,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QMimeData, QUrl
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QMimeData, QUrl, QSize
 from PyQt6.QtGui import (QAction, QDragEnterEvent, QDropEvent, QIcon, QShortcut,
                          QKeySequence, QFont, QColor, QDesktopServices)
 from src.config import (
@@ -95,7 +95,7 @@ class BugReportDialog(QDialog):
         btn_attach.clicked.connect(self._pick_image)
         img_row.addWidget(btn_attach)
         self.lbl_image = QLabel("No image attached")
-        self.lbl_image.setStyleSheet("color: #a6adc8;")
+        self.lbl_image.setStyleSheet("color: #6b7280;")
         img_row.addWidget(self.lbl_image)
         self.btn_clear_image = QPushButton("X")
         self.btn_clear_image.setFixedWidth(28)
@@ -112,7 +112,7 @@ class BugReportDialog(QDialog):
             self.chk_include_log.setChecked(True)
             log_row.addWidget(self.chk_include_log)
             lbl_log = QLabel(self._latest_log.name)
-            lbl_log.setStyleSheet("color: #a6adc8;")
+            lbl_log.setStyleSheet("color: #6b7280;")
             log_row.addWidget(lbl_log)
         else:
             self.chk_include_log.setEnabled(False)
@@ -151,13 +151,13 @@ class BugReportDialog(QDialog):
             return
         self._image_path = path
         self.lbl_image.setText(os.path.basename(path))
-        self.lbl_image.setStyleSheet("color: #cdd6f4;")
+        self.lbl_image.setStyleSheet("color: #1b1d21;")
         self.btn_clear_image.setVisible(True)
 
     def _clear_image(self):
         self._image_path = None
         self.lbl_image.setText("No image attached")
-        self.lbl_image.setStyleSheet("color: #a6adc8;")
+        self.lbl_image.setStyleSheet("color: #6b7280;")
         self.btn_clear_image.setVisible(False)
 
     def _send_report(self):
@@ -173,7 +173,7 @@ class BugReportDialog(QDialog):
 
         self.btn_send.setEnabled(False)
         self.lbl_status.setText("Sending report...")
-        self.lbl_status.setStyleSheet("color: #a6adc8;")
+        self.lbl_status.setStyleSheet("color: #6b7280;")
 
         name = self.edit_name.text().strip()
         email = self.edit_email.text().strip()
@@ -275,13 +275,13 @@ class BugReportDialog(QDialog):
     def _on_send_result(self, success, message):
         if success:
             self.lbl_status.setText(message)
-            self.lbl_status.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+            self.lbl_status.setStyleSheet("color: #1f9d57; font-weight: bold;")
             self.btn_send.setText("Sent!")
             self.btn_send.setEnabled(False)
             self.btn_close.setText("Close")
         else:
             self.lbl_status.setText(message)
-            self.lbl_status.setStyleSheet("color: #f38ba8;")
+            self.lbl_status.setStyleSheet("color: #d92d20;")
             self.btn_send.setEnabled(True)
 
 
@@ -916,46 +916,68 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- Sidebar navigation ----
-        sidebar = QWidget()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(228)
-        sb = QVBoxLayout(sidebar)
-        sb.setContentsMargins(16, 20, 16, 14)
-        sb.setSpacing(4)
+        # ---- Far-left icon rail (UniFi-style) ----
+        rail = QWidget()
+        rail.setObjectName("iconRail")
+        rail.setFixedWidth(64)
+        rl = QVBoxLayout(rail)
+        rl.setContentsMargins(10, 16, 10, 16)
+        rl.setSpacing(8)
+        logo = QLabel()
+        logo.setPixmap(self._make_app_icon(mask=False).pixmap(28, 28))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        rl.addWidget(logo)
+        rl.addSpacing(8)
+        self._rail_box = QVBoxLayout()
+        self._rail_box.setSpacing(6)
+        rl.addLayout(self._rail_box)
+        rl.addStretch(1)
+        root.addWidget(rail)
 
+        # ---- Secondary nav panel ----
+        navp = QWidget()
+        navp.setObjectName("navPanel")
+        navp.setFixedWidth(210)
+        nv = QVBoxLayout(navp)
+        nv.setContentsMargins(14, 18, 14, 14)
+        nv.setSpacing(4)
         brand = QLabel(APP_NAME)
         brand.setObjectName("brandLabel")
         brand.setWordWrap(True)
-        sb.addWidget(brand)
+        nv.addWidget(brand)
         ver = QLabel(f"v{APP_VERSION}")
         ver.setObjectName("brandVersion")
-        sb.addWidget(ver)
-        sb.addSpacing(18)
-
+        nv.addWidget(ver)
+        nv.addSpacing(12)
+        self.nav_search = QLineEdit()
+        self.nav_search.setObjectName("navSearch")
+        self.nav_search.setPlaceholderText("Search")
+        self.nav_search.setClearButtonEnabled(True)
+        self.nav_search.textChanged.connect(self._filter_nav)
+        nv.addWidget(self.nav_search)
+        nv.addSpacing(8)
         self._nav_box = QVBoxLayout()
-        self._nav_box.setSpacing(4)
-        sb.addLayout(self._nav_box)
-        sb.addStretch(1)
+        self._nav_box.setSpacing(3)
+        nv.addLayout(self._nav_box)
+        nv.addStretch(1)
 
-        # Footer status (jobs + CPU)
         sep = QFrame()
         sep.setObjectName("sidebarSep")
         sep.setFrameShape(QFrame.Shape.HLine)
-        sb.addWidget(sep)
+        nv.addWidget(sep)
         status_cap = QLabel("STATUS")
         status_cap.setObjectName("sidebarCaption")
-        sb.addWidget(status_cap)
+        nv.addWidget(status_cap)
         self.global_progress = QProgressBar()
         self.global_progress.setFormat("%v/%m jobs")
-        sb.addWidget(self.global_progress)
+        nv.addWidget(self.global_progress)
         self.cpu_progress = QProgressBar()
         self.cpu_progress.setRange(0, 100)
         self.cpu_progress.setValue(0)
         self.cpu_progress.setFormat("CPU %v%")
         self.cpu_progress.setObjectName("cpuBar")
-        sb.addWidget(self.cpu_progress)
-        root.addWidget(sidebar)
+        nv.addWidget(self.cpu_progress)
+        root.addWidget(navp)
 
         # ---- Content area (stacked pages) ----
         content = QWidget()
@@ -970,12 +992,14 @@ class MainWindow(QMainWindow):
         # Pages (each was previously a tab)
         self._page_names = []
         self._nav_buttons = []
-        self._add_page("Render Queue", self._create_queue_tab())
-        self._add_page("Render Settings", self._create_settings_tab())
-        self._add_page("Render Farm", self._create_farm_tab())
-        self._add_page("Transfers", self._create_transfers_tab())
-        self._add_page("Renders", self._create_renders_tab())
-        self._add_page("App Settings", self._create_app_settings_tab())
+        self._rail_buttons = []
+        self._nav_kinds = []
+        self._add_page("Render Queue", self._create_queue_tab(), "list")
+        self._add_page("Render Settings", self._create_settings_tab(), "sliders")
+        self._add_page("Render Farm", self._create_farm_tab(), "nodes")
+        self._add_page("Transfers", self._create_transfers_tab(), "transfers")
+        self._add_page("Renders", self._create_renders_tab(), "play")
+        self._add_page("App Settings", self._create_app_settings_tab(), "gear")
 
         self.pages.currentChanged.connect(self._on_tab_changed)
         self._set_page(0)
@@ -985,25 +1009,115 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
 
-    def _add_page(self, name, widget):
-        """Add a content page and a matching sidebar nav button."""
+    def _add_page(self, name, widget, kind="list"):
+        """Add a content page with a matching icon-rail button and nav-panel row."""
         idx = self.pages.addWidget(widget)
         self._page_names.append(name)
-        btn = QPushButton(name)
-        btn.setObjectName("navButton")
-        btn.setCheckable(True)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.clicked.connect(lambda _checked=False, i=idx: self._set_page(i))
-        self._nav_box.addWidget(btn)
-        self._nav_buttons.append(btn)
+        self._nav_kinds.append(kind)
+
+        rb = QPushButton()
+        rb.setObjectName("railButton")
+        rb.setCheckable(True)
+        rb.setToolTip(name)
+        rb.setCursor(Qt.CursorShape.PointingHandCursor)
+        rb.setIconSize(QSize(22, 22))
+        rb.setFixedSize(44, 40)
+        rb.setIcon(self._make_nav_icon(kind, False))
+        rb.clicked.connect(lambda _c=False, i=idx: self._set_page(i))
+        self._rail_box.addWidget(rb, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._rail_buttons.append(rb)
+
+        nb = QPushButton(name)
+        nb.setObjectName("navButton")
+        nb.setCheckable(True)
+        nb.setCursor(Qt.CursorShape.PointingHandCursor)
+        nb.setIconSize(QSize(18, 18))
+        nb.setIcon(self._make_nav_icon(kind, False))
+        nb.clicked.connect(lambda _c=False, i=idx: self._set_page(i))
+        self._nav_box.addWidget(nb)
+        self._nav_buttons.append(nb)
         return idx
 
     def _set_page(self, index):
-        """Switch the visible page and highlight its nav button."""
-        if 0 <= index < self.pages.count():
-            self.pages.setCurrentIndex(index)
-            for j, b in enumerate(self._nav_buttons):
-                b.setChecked(j == index)
+        """Switch the visible page and highlight its rail + nav buttons."""
+        if not (0 <= index < self.pages.count()):
+            return
+        self.pages.setCurrentIndex(index)
+        for j in range(len(self._nav_buttons)):
+            active = (j == index)
+            self._nav_buttons[j].setChecked(active)
+            self._rail_buttons[j].setChecked(active)
+            icon = self._make_nav_icon(self._nav_kinds[j], active)
+            self._nav_buttons[j].setIcon(icon)
+            self._rail_buttons[j].setIcon(icon)
+
+    def _filter_nav(self, text):
+        """Hide nav-panel rows that don't match the search text."""
+        t = (text or "").strip().lower()
+        for nb, name in zip(self._nav_buttons, self._page_names):
+            nb.setVisible(t in name.lower())
+
+    def _make_nav_icon(self, kind, active=False):
+        """Draw a simple line glyph for a nav section (grey, or blue when active)."""
+        import math
+        from PyQt6.QtGui import QPixmap, QPainter, QColor, QPen, QPolygonF, QIcon
+        from PyQt6.QtCore import QPointF
+        S = 44
+        pm = QPixmap(S, S)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        col = QColor("#006fff" if active else "#8a9099")
+        pen = QPen(col)
+        pen.setWidthF(2.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        if kind == "list":
+            for y in (15, 22, 29):
+                p.drawLine(13, y, 31, y)
+        elif kind == "sliders":
+            ys = (15, 22, 29)
+            knob = (29, 17, 25)
+            for y in ys:
+                p.drawLine(13, y, 31, y)
+            p.setBrush(col)
+            for y, kx in zip(ys, knob):
+                p.drawEllipse(QPointF(kx, y), 3.0, 3.0)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+        elif kind == "nodes":
+            pts = [QPointF(15, 15), QPointF(30, 18), QPointF(18, 30)]
+            p.drawLine(pts[0], pts[1])
+            p.drawLine(pts[1], pts[2])
+            p.drawLine(pts[0], pts[2])
+            p.setBrush(col)
+            for pt in pts:
+                p.drawEllipse(pt, 3.2, 3.2)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+        elif kind == "transfers":
+            p.drawLine(17, 13, 17, 31)
+            p.drawLine(17, 13, 13, 18)
+            p.drawLine(17, 13, 21, 18)
+            p.drawLine(28, 13, 28, 31)
+            p.drawLine(28, 31, 24, 26)
+            p.drawLine(28, 31, 32, 26)
+        elif kind == "play":
+            p.setBrush(col)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(16, 13), QPointF(32, 22), QPointF(16, 31)]))
+        elif kind == "gear":
+            p.drawEllipse(QPointF(22, 22), 7.0, 7.0)
+            for i in range(8):
+                a = i * math.pi / 4
+                p.drawLine(QPointF(22 + 7.5 * math.cos(a), 22 + 7.5 * math.sin(a)),
+                           QPointF(22 + 10.5 * math.cos(a), 22 + 10.5 * math.sin(a)))
+            p.setBrush(col)
+            p.drawEllipse(QPointF(22, 22), 2.3, 2.3)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+        p.end()
+        return QIcon(pm)
 
     # ---- macOS menu-bar (system tray) icon ----
     def _make_app_icon(self, mask=False):
@@ -1019,7 +1133,7 @@ class MainWindow(QMainWindow):
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        frame = QColor("#e6e9f5" if mask else "#89b4fa")
+        frame = QColor("#e6e9f5" if mask else "#006fff")
         p.setBrush(frame)
         p.drawRoundedRect(QRectF(4, 4, size - 8, size - 8), 11, 11)
         tri = QPolygonF([QPointF(17, 14), QPointF(32, 22), QPointF(17, 30)])
@@ -1519,7 +1633,7 @@ class MainWindow(QMainWindow):
         conn_row.addStretch()
 
         self.lbl_farm_status = QLabel("Status: Not started")
-        self.lbl_farm_status.setStyleSheet("color: #f9e2af; font-weight: bold;")
+        self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
         conn_row.addWidget(self.lbl_farm_status)
         mode_layout.addLayout(conn_row)
 
@@ -1593,7 +1707,7 @@ class MainWindow(QMainWindow):
         # Client sync folder status (this machine's render cache)
         syncinfo_row = QHBoxLayout()
         self.lbl_farm_sync_dir = QLabel()
-        self.lbl_farm_sync_dir.setStyleSheet("color: #a6adc8;")
+        self.lbl_farm_sync_dir.setStyleSheet("color: #6b7280;")
         self.lbl_farm_sync_dir.setToolTip(
             "This machine's render-cache folder (set in Settings → Client Sync Folder).\n"
             "Farm jobs that ship files keep one local copy here; only changed files re-download.")
@@ -1780,11 +1894,11 @@ class MainWindow(QMainWindow):
         # Farm stats bar
         stats_layout = QHBoxLayout()
         self.lbl_farm_stats = QLabel("Farm: not running")
-        self.lbl_farm_stats.setStyleSheet("color: #a6adc8;")
+        self.lbl_farm_stats.setStyleSheet("color: #6b7280;")
         stats_layout.addWidget(self.lbl_farm_stats)
         stats_layout.addStretch()
         self.lbl_farm_total_time = QLabel("")
-        self.lbl_farm_total_time.setStyleSheet("color: #a6adc8;")
+        self.lbl_farm_total_time.setStyleSheet("color: #6b7280;")
         stats_layout.addWidget(self.lbl_farm_total_time)
         layout.addLayout(stats_layout)
 
@@ -1812,7 +1926,7 @@ class MainWindow(QMainWindow):
 
         info = QLabel("Live file-transfer and sync status of farm clients "
                       "(downloads, syncing, rendering, and cached project files).")
-        info.setStyleSheet("color: #a6adc8;")
+        info.setStyleSheet("color: #6b7280;")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -1829,7 +1943,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.transfers_table)
 
         self.lbl_transfers_summary = QLabel("")
-        self.lbl_transfers_summary.setStyleSheet("color: #a6adc8;")
+        self.lbl_transfers_summary.setStyleSheet("color: #6b7280;")
         layout.addWidget(self.lbl_transfers_summary)
 
         self._transfers_tab = widget
@@ -1942,7 +2056,7 @@ class MainWindow(QMainWindow):
         info = QLabel("Finished videos collected from the farm. Pick a project, choose a "
                       "version to trace back, preview it (timeline + loop), or save a copy "
                       "to your computer.")
-        info.setStyleSheet("color: #a6adc8;")
+        info.setStyleSheet("color: #6b7280;")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -2013,7 +2127,7 @@ class MainWindow(QMainWindow):
             note = QLabel("Embedded video preview isn't available on this system.\n"
                           "Use \"Open in Player\" to watch in your default video app.")
             note.setWordWrap(True)
-            note.setStyleSheet("color: #a6adc8;")
+            note.setStyleSheet("color: #6b7280;")
             rv.addWidget(note)
             rv.addStretch()
         split.addWidget(right)
@@ -2458,7 +2572,7 @@ class MainWindow(QMainWindow):
         self.btn_check_update.clicked.connect(self._check_for_update)
         update_row.addWidget(self.btn_check_update)
         self.lbl_update_status = QLabel("")
-        self.lbl_update_status.setStyleSheet("color: #a6adc8;")
+        self.lbl_update_status.setStyleSheet("color: #6b7280;")
         update_row.addWidget(self.lbl_update_status)
         update_row.addStretch()
         update_layout.addLayout(update_row)
@@ -2470,7 +2584,7 @@ class MainWindow(QMainWindow):
         about_layout = QVBoxLayout(about_group)
         about_layout.addWidget(QLabel(f"{APP_NAME} v{APP_VERSION}"))
         about_layout.addWidget(QLabel(f"Created by {APP_AUTHOR}"))
-        link_style = 'style="color: #74c7ec;"'
+        link_style = 'style="color: #006fff;"'
         lbl_email = QLabel(f'Contact: <a href="mailto:damian@realidad360.com.ar" {link_style}>damian@realidad360.com.ar</a>')
         lbl_email.setOpenExternalLinks(True)
         lbl_email.setTextInteractionFlags(lbl_email.textInteractionFlags() | Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -2689,14 +2803,14 @@ class MainWindow(QMainWindow):
             status_text = "COMPOSE" if (is_compose and job.status == RenderStatus.PENDING.value) else job.status.upper()
             status_item = QTableWidgetItem(status_text)
             color_map = {
-                "pending": "#f9e2af",
-                "rendering": "#89b4fa",
-                "completed": "#a6e3a1",
-                "failed": "#f38ba8",
+                "pending": "#b7791f",
+                "rendering": "#006fff",
+                "completed": "#1f9d57",
+                "failed": "#d92d20",
                 "cancelled": "#6c7086",
                 "skipped": "#cba6f7",
             }
-            status_item.setForeground(QColor(color_map.get(job.status, "#cdd6f4")))
+            status_item.setForeground(QColor(color_map.get(job.status, "#1b1d21")))
             self.queue_table.setItem(row, 0, status_item)
 
             # Project
@@ -2713,7 +2827,7 @@ class MainWindow(QMainWindow):
             out = job.output_path or "(project folder)"
             out_item = QTableWidgetItem(out)
             out_item.setFont(link_font)
-            out_item.setForeground(QColor("#89b4fa"))
+            out_item.setForeground(QColor("#006fff"))
             self.queue_table.setItem(row, 4, out_item)
             # Progress
             prog_item = QTableWidgetItem(f"{job.progress:.0f}%")
@@ -3623,7 +3737,7 @@ class MainWindow(QMainWindow):
         self.btn_start_farm_queue.setEnabled(False)
         ip = self.master_server.get_local_ip()
         self.lbl_farm_status.setText(f"Master running on {ip}:{port}")
-        self.lbl_farm_status.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+        self.lbl_farm_status.setStyleSheet("color: #1f9d57; font-weight: bold;")
         self._append_farm_log(f"[MASTER] Started on {ip}:{port}")
         self.config.set("network_port", port)
 
@@ -3654,7 +3768,7 @@ class MainWindow(QMainWindow):
         self.btn_start_farm_queue.setEnabled(False)
         self.btn_stop_farm_queue.setEnabled(False)
         self.lbl_farm_status.setText("Status: Stopped")
-        self.lbl_farm_status.setStyleSheet("color: #f9e2af; font-weight: bold;")
+        self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
         self.lbl_farm_stats.setText("Farm: not running")
         self.lbl_farm_total_time.setText("")
         self.farm_queue_table.setRowCount(0)
@@ -3679,7 +3793,7 @@ class MainWindow(QMainWindow):
         """Start scanning local network for a running master server."""
         self.btn_find_master.setEnabled(False)
         self.lbl_farm_status.setText("Scanning network...")
-        self.lbl_farm_status.setStyleSheet("color: #89b4fa; font-weight: bold;")
+        self.lbl_farm_status.setStyleSheet("color: #006fff; font-weight: bold;")
         self.farm_log_signal.emit("[GUI] Scanning local network for master...")
         import threading
         threading.Thread(target=self._scan_network, daemon=True).start()
@@ -3734,17 +3848,17 @@ class MainWindow(QMainWindow):
             self.edit_master_host.setText(ip)
             self.farm_log_signal.emit(f"[GUI] Master found at {ip}")
             self.lbl_farm_status.setText(f"Master found: {ip}")
-            self.lbl_farm_status.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+            self.lbl_farm_status.setStyleSheet("color: #1f9d57; font-weight: bold;")
         else:
             self.farm_log_signal.emit("[GUI] No master found on local network")
             self.lbl_farm_status.setText("No master found")
-            self.lbl_farm_status.setStyleSheet("color: #f38ba8; font-weight: bold;")
+            self.lbl_farm_status.setStyleSheet("color: #d92d20; font-weight: bold;")
 
     def _check_for_update(self):
         """Check for app updates from GitHub (manual button)."""
         self.btn_check_update.setEnabled(False)
         self.lbl_update_status.setText("Checking for updates...")
-        self.lbl_update_status.setStyleSheet("color: #89b4fa;")
+        self.lbl_update_status.setStyleSheet("color: #006fff;")
         self._append_log("Checking for updates...")
         import threading
         threading.Thread(target=self._do_update_check_only, daemon=True).start()
@@ -3776,7 +3890,7 @@ class MainWindow(QMainWindow):
         if version and downloaded:
             # Update downloaded and staged — offer restart
             self.lbl_update_status.setText(f"v{version} ready — restart to apply")
-            self.lbl_update_status.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+            self.lbl_update_status.setStyleSheet("color: #1f9d57; font-weight: bold;")
             self._append_log(f"Update v{version} downloaded and ready to install")
             reply = QMessageBox.question(
                 self, "Update Ready",
@@ -3789,7 +3903,7 @@ class MainWindow(QMainWindow):
         elif version and not downloaded:
             # Update found — ask user if they want to download
             self.lbl_update_status.setText(f"v{version} available")
-            self.lbl_update_status.setStyleSheet("color: #f9e2af; font-weight: bold;")
+            self.lbl_update_status.setStyleSheet("color: #b7791f; font-weight: bold;")
             self._append_log(f"Update available: v{version} (current: v{APP_VERSION})")
             reply = QMessageBox.question(
                 self, "Update Available",
@@ -3800,17 +3914,17 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 self.btn_check_update.setEnabled(False)
                 self.lbl_update_status.setText(f"Downloading v{version}...")
-                self.lbl_update_status.setStyleSheet("color: #89b4fa;")
+                self.lbl_update_status.setStyleSheet("color: #006fff;")
                 self._append_log(f"Downloading update v{version}...")
                 import threading
                 threading.Thread(target=self._do_download_update, args=(version,), daemon=True).start()
             else:
                 self.lbl_update_status.setText(f"v{version} available — skipped")
-                self.lbl_update_status.setStyleSheet("color: #a6adc8;")
+                self.lbl_update_status.setStyleSheet("color: #6b7280;")
                 self._append_log(f"Update v{version} skipped by user")
         else:
             self.lbl_update_status.setText("You are up to date")
-            self.lbl_update_status.setStyleSheet("color: #a6adc8;")
+            self.lbl_update_status.setStyleSheet("color: #6b7280;")
             self._append_log(f"No updates available (current: v{APP_VERSION})")
 
     def _apply_update_and_restart(self):
@@ -3857,7 +3971,7 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         """Show About dialog."""
-        link = 'style="color: #74c7ec;"'
+        link = 'style="color: #006fff;"'
         dlg = QMessageBox(self)
         dlg.setWindowTitle("About Moho Render Farm")
         dlg.setTextFormat(Qt.TextFormat.RichText)
@@ -3883,13 +3997,13 @@ class MainWindow(QMainWindow):
         self.slave_client.version_output = self.config.get("farm_version_output", False)
         self.slave_client.on_output = lambda msg: self.farm_log_signal.emit(f"[SLAVE] {msg}")
         self.slave_client.on_connected = lambda: (
-            self.farm_status_signal.emit(f"Slave connected to {host}:{port}", "#a6e3a1"),
+            self.farm_status_signal.emit(f"Slave connected to {host}:{port}", "#1f9d57"),
             self.slave_connection_signal.emit(True))
         self.slave_client.on_disconnected = lambda: (
-            self.farm_status_signal.emit(f"Slave disconnected from {host}:{port}", "#f38ba8"),
+            self.farm_status_signal.emit(f"Slave disconnected from {host}:{port}", "#d92d20"),
             self.slave_connection_signal.emit(False))
         self.slave_client.on_status_changed = lambda s: self.farm_status_signal.emit(
-            f"Slave: {s}", "#a6e3a1")
+            f"Slave: {s}", "#1f9d57")
         self.slave_client.on_job_started = lambda j: self.farm_queue_changed_signal.emit()
         self.slave_client.on_job_completed = lambda j: self.farm_queue_changed_signal.emit()
         self.slave_client.on_force_update = lambda: self.slave_force_update_signal.emit()
@@ -3904,7 +4018,7 @@ class MainWindow(QMainWindow):
         self.btn_stop_slave.setEnabled(True)
         self.btn_start_master.setEnabled(False)
         self.lbl_farm_status.setText(f"Slave connecting to {host}:{port}...")
-        self.lbl_farm_status.setStyleSheet("color: #89b4fa; font-weight: bold;")
+        self.lbl_farm_status.setStyleSheet("color: #006fff; font-weight: bold;")
         self._append_farm_log(f"[SLAVE] Connecting to {host}:{port}...")
         self.config.set("network_master_host", host)
         self.config.set("network_port", port)
@@ -3919,7 +4033,7 @@ class MainWindow(QMainWindow):
         self.lbl_slave_hostname.setText(self.slave_client.hostname)
         self.lbl_slave_master.setText(f"{host}:{port}")
         self.lbl_slave_connection.setText("Connecting...")
-        self.lbl_slave_connection.setStyleSheet("color: #f9e2af;")
+        self.lbl_slave_connection.setStyleSheet("color: #b7791f;")
         mode = "render+submit" if self.slave_client.render_enabled else "submit-only"
         self.lbl_slave_render_mode.setText(mode)
         self.lbl_slave_workers.setText(f"0/{self.slave_client._max_concurrent}")
@@ -3947,7 +4061,7 @@ class MainWindow(QMainWindow):
         self.btn_stop_slave.setEnabled(False)
         self.btn_start_master.setEnabled(True)
         self.lbl_farm_status.setText("Status: Stopped")
-        self.lbl_farm_status.setStyleSheet("color: #f9e2af; font-weight: bold;")
+        self.lbl_farm_status.setStyleSheet("color: #b7791f; font-weight: bold;")
         self.lbl_farm_stats.setText("Farm: not running")
         self.lbl_farm_total_time.setText("")
         self.farm_queue_table.setRowCount(0)
@@ -3962,10 +4076,10 @@ class MainWindow(QMainWindow):
         """Update slave info panel connection status (called via signal from GUI thread)."""
         if connected:
             self.lbl_slave_connection.setText("Connected")
-            self.lbl_slave_connection.setStyleSheet("color: #a6e3a1;")
+            self.lbl_slave_connection.setStyleSheet("color: #1f9d57;")
         else:
             self.lbl_slave_connection.setText("Disconnected")
-            self.lbl_slave_connection.setStyleSheet("color: #f38ba8;")
+            self.lbl_slave_connection.setStyleSheet("color: #d92d20;")
 
     def _refresh_slave_info(self):
         """Update the slave status info panel with current slave data."""
@@ -4006,9 +4120,9 @@ class MainWindow(QMainWindow):
         slaves = self.master_server.slaves
         self.slaves_table.setRowCount(len(slaves))
         status_colors = {
-            "idle": "#a6e3a1",      # green
-            "rendering": "#89b4fa",  # blue
-            "offline": "#f38ba8",    # red
+            "idle": "#1f9d57",      # green
+            "rendering": "#006fff",  # blue
+            "offline": "#d92d20",    # red
             "disabled": "#9399b2",   # gray
         }
         for row, (key, slave) in enumerate(slaves.items()):
@@ -4021,7 +4135,7 @@ class MainWindow(QMainWindow):
             else:
                 actual_status = slave.status
             status_item = QTableWidgetItem(actual_status)
-            color = status_colors.get(actual_status, "#cdd6f4")
+            color = status_colors.get(actual_status, "#1b1d21")
             status_item.setForeground(QColor(color))
             self.slaves_table.setItem(row, 2, status_item)
             self.slaves_table.setItem(row, 3, QTableWidgetItem(slave.current_job_id))
@@ -4029,7 +4143,7 @@ class MainWindow(QMainWindow):
             self.slaves_table.setItem(row, 5, QTableWidgetItem(str(slave.jobs_failed)))
             render_text = "Yes" if slave.render_enabled else "No"
             render_item = QTableWidgetItem(render_text)
-            render_item.setForeground(QColor("#a6e3a1" if slave.render_enabled else "#f38ba8"))
+            render_item.setForeground(QColor("#1f9d57" if slave.render_enabled else "#d92d20"))
             self.slaves_table.setItem(row, 6, render_item)
 
     def _refresh_farm_queue_table(self):
@@ -4059,11 +4173,11 @@ class MainWindow(QMainWindow):
             display_jobs.append((job.status.upper(), job))
 
         color_map = {
-            "PENDING": "#f9e2af",     # yellow
+            "PENDING": "#b7791f",     # yellow
             "RESERVED": "#fab387",    # orange
-            "RENDERING": "#89b4fa",   # blue
-            "COMPLETED": "#a6e3a1",   # green
-            "FAILED": "#f38ba8",      # red
+            "RENDERING": "#006fff",   # blue
+            "COMPLETED": "#1f9d57",   # green
+            "FAILED": "#d92d20",      # red
             "CANCELLED": "#6c7086",   # gray
         }
 
@@ -4072,7 +4186,7 @@ class MainWindow(QMainWindow):
 
         for row, (status_text, job) in enumerate(display_jobs):
             status_item = QTableWidgetItem(status_text)
-            status_item.setForeground(QColor(color_map.get(status_text, "#cdd6f4")))
+            status_item.setForeground(QColor(color_map.get(status_text, "#1b1d21")))
             self.farm_queue_table.setItem(row, 0, status_item)
             self.farm_queue_table.setItem(row, 1, QTableWidgetItem(job.project_name))
             self.farm_queue_table.setItem(row, 2, QTableWidgetItem(job.format))
@@ -4086,7 +4200,7 @@ class MainWindow(QMainWindow):
             elif job.project_file:
                 out_text = os.path.basename(os.path.dirname(job.project_file))
             out_item = QTableWidgetItem(out_text)
-            out_item.setForeground(QColor("#89b4fa"))
+            out_item.setForeground(QColor("#006fff"))
             self.farm_queue_table.setItem(row, 6, out_item)
             self.farm_queue_table.setItem(row, 7, QTableWidgetItem(job.id))
 
@@ -4128,9 +4242,9 @@ class MainWindow(QMainWindow):
             display_jobs.append((job.status.upper(), job))
 
         color_map = {
-            "RENDERING": "#89b4fa",
-            "COMPLETED": "#a6e3a1",
-            "FAILED": "#f38ba8",
+            "RENDERING": "#006fff",
+            "COMPLETED": "#1f9d57",
+            "FAILED": "#d92d20",
             "CANCELLED": "#6c7086",
         }
 
@@ -4139,7 +4253,7 @@ class MainWindow(QMainWindow):
 
         for row, (status_text, job) in enumerate(display_jobs):
             status_item = QTableWidgetItem(status_text)
-            status_item.setForeground(QColor(color_map.get(status_text, "#cdd6f4")))
+            status_item.setForeground(QColor(color_map.get(status_text, "#1b1d21")))
             self.farm_queue_table.setItem(row, 0, status_item)
             self.farm_queue_table.setItem(row, 1, QTableWidgetItem(job.project_name))
             self.farm_queue_table.setItem(row, 2, QTableWidgetItem(job.format))
@@ -4152,7 +4266,7 @@ class MainWindow(QMainWindow):
             elif job.project_file:
                 out_text = os.path.basename(os.path.dirname(job.project_file))
             out_item = QTableWidgetItem(out_text)
-            out_item.setForeground(QColor("#89b4fa"))
+            out_item.setForeground(QColor("#006fff"))
             self.farm_queue_table.setItem(row, 6, out_item)
             self.farm_queue_table.setItem(row, 7, QTableWidgetItem(job.id))
 
