@@ -4,6 +4,7 @@ import sys
 import socket
 import threading
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -1798,12 +1799,15 @@ class MainWindow(QMainWindow):
 
     # --- Renders tab: browse / play / download finished videos ---
     _VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".gif", ".mkv", ".webm")
+    # Matches "<project>_YYYYMMDD_HHMMSS" so versioned renders group by project
+    _VERSION_RE = re.compile(r"^(.+)_(\d{8})_(\d{6})$")
 
     def _create_renders_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        info = QLabel("Finished videos collected from the farm (and this machine's farm "
-                      "renders). Select one to preview, or save a copy to your computer.")
+        info = QLabel("Finished videos collected from the farm. Pick a project, choose a "
+                      "version to trace back, preview it (timeline + loop), or save a copy "
+                      "to your computer.")
         info.setStyleSheet("color: #a6adc8;")
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -1813,9 +1817,17 @@ class MainWindow(QMainWindow):
         left = QWidget()
         lv = QVBoxLayout(left)
         self.renders_list = QListWidget()
-        self.renders_list.itemSelectionChanged.connect(self._update_render_buttons)
+        self.renders_list.itemSelectionChanged.connect(self._on_render_group_selected)
         self.renders_list.itemDoubleClicked.connect(lambda _it: self._play_selected_render())
         lv.addWidget(self.renders_list)
+        ver_row = QHBoxLayout()
+        ver_row.addWidget(QLabel("Version:"))
+        self.render_version_combo = QComboBox()
+        self.render_version_combo.setToolTip("Pick which rendered version to preview / save "
+                                             "(newest first)")
+        self.render_version_combo.currentIndexChanged.connect(self._on_render_version_changed)
+        ver_row.addWidget(self.render_version_combo, 1)
+        lv.addLayout(ver_row)
         btn_row = QHBoxLayout()
         b_refresh = QPushButton("Refresh")
         b_refresh.clicked.connect(self._refresh_renders_list)
@@ -1895,10 +1907,22 @@ class MainWindow(QMainWindow):
         dirs.append(Path(fr).expanduser() if fr else Path(DEFAULT_FARM_RENDERS_DIR))
         return dirs
 
+    def _parse_render_version(self, stem):
+        """Split a render filename stem into (project_base, version_label).
+        version_label is a readable timestamp, or None for an unversioned file."""
+        m = self._VERSION_RE.match(stem)
+        if m:
+            try:
+                dt = datetime.strptime(m.group(2) + m.group(3), "%Y%m%d%H%M%S")
+                return m.group(1), dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return m.group(1), f"{m.group(2)}_{m.group(3)}"
+        return stem, None
+
     def _refresh_renders_list(self):
-        self.renders_list.clear()
+        """Scan render folders and group videos by project, newest version first."""
+        groups = {}
         seen = set()
-        items = []
         for d in self._render_dirs():
             try:
                 if not d or not Path(d).is_dir():
@@ -1912,29 +1936,71 @@ class MainWindow(QMainWindow):
                     seen.add(rp)
                     try:
                         st = f.stat()
-                        items.append((st.st_mtime, f, st.st_size))
                     except OSError:
-                        pass
+                        continue
+                    base, label = self._parse_render_version(f.stem)
+                    groups.setdefault(base, []).append({
+                        "path": rp, "label": label, "mtime": st.st_mtime,
+                        "size": st.st_size, "ext": f.suffix.lower(),
+                    })
             except OSError:
                 continue
-        items.sort(key=lambda x: x[0], reverse=True)
-        for _mt, f, sz in items:
-            it = QListWidgetItem(f"{f.name}   ({sz / 1024 / 1024:.1f} MB)")
-            it.setData(Qt.ItemDataRole.UserRole, str(f))
-            self.renders_list.addItem(it)
-        self._update_render_buttons()
+        for versions in groups.values():
+            versions.sort(key=lambda v: v["mtime"], reverse=True)
+        self._render_groups = groups
 
-    def _selected_render_path(self):
+        ordered = sorted(groups.items(), key=lambda kv: kv[1][0]["mtime"], reverse=True)
+        self.renders_list.blockSignals(True)
+        self.renders_list.clear()
+        for base, versions in ordered:
+            n = len(versions)
+            suffix = f"   ({n} versions)" if n > 1 else ""
+            it = QListWidgetItem(f"{base}{suffix}")
+            it.setData(Qt.ItemDataRole.UserRole, base)
+            self.renders_list.addItem(it)
+        self.renders_list.blockSignals(False)
+        if self.renders_list.count() > 0:
+            self.renders_list.setCurrentRow(0)
+        else:
+            self.render_version_combo.clear()
+            self._update_render_buttons()
+
+    def _on_render_group_selected(self):
         it = self.renders_list.currentItem()
-        return it.data(Qt.ItemDataRole.UserRole) if it else None
+        self.render_version_combo.blockSignals(True)
+        self.render_version_combo.clear()
+        if it:
+            base = it.data(Qt.ItemDataRole.UserRole)
+            for v in self._render_groups.get(base, []):
+                lbl = v["label"] or "original"
+                text = f"{lbl} · {v['ext'].lstrip('.')} · {v['size'] / 1024 / 1024:.1f} MB"
+                self.render_version_combo.addItem(text, v["path"])
+            self.render_version_combo.setCurrentIndex(0)
+        self.render_version_combo.blockSignals(False)
+        self._load_current_version()
+
+    def _on_render_version_changed(self, _idx):
+        self._load_current_version()
+
+    def _current_render_path(self):
+        return self.render_version_combo.currentData()
+
+    def _load_current_version(self):
+        """Make the selected version current (ready to play); don't auto-play."""
+        path = self._current_render_path()
+        self._update_render_buttons()
+        if path and self._player is not None:
+            self._player.setSource(QUrl.fromLocalFile(path))
 
     def _update_render_buttons(self):
-        has = self._selected_render_path() is not None
+        has = self._current_render_path() is not None
         for b in (self.btn_render_save, self.btn_render_openext, self.btn_render_reveal):
             b.setEnabled(has)
+        if self._player is not None:
+            self.btn_play.setEnabled(has)
 
     def _play_selected_render(self):
-        path = self._selected_render_path()
+        path = self._current_render_path()
         if not path:
             return
         if self._player is not None:
@@ -1985,7 +2051,7 @@ class MainWindow(QMainWindow):
             self._player.play()
 
     def _save_selected_render(self):
-        path = self._selected_render_path()
+        path = self._current_render_path()
         if not path:
             return
         import shutil
@@ -1998,12 +2064,12 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Save Failed", str(e))
 
     def _open_selected_render_external(self):
-        path = self._selected_render_path()
+        path = self._current_render_path()
         if path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _reveal_selected_render(self):
-        path = self._selected_render_path()
+        path = self._current_render_path()
         if path:
             from src.utils import platform_utils
             platform_utils.open_in_file_manager(path)
@@ -2110,7 +2176,7 @@ class MainWindow(QMainWindow):
             "When rendering on the farm, name each output with a timestamp (e.g.\n"
             "Intro_20260614_154500.mp4) so re-rendering the same project keeps the\n"
             "previous file instead of overwriting it.")
-        self.chk_version_output.setChecked(self.config.get("farm_version_output", False))
+        self.chk_version_output.setChecked(self.config.get("farm_version_output", True))
         self.chk_version_output.toggled.connect(
             lambda v: self.config.set("farm_version_output", v))
         farm_render_layout.addRow("", self.chk_version_output)
