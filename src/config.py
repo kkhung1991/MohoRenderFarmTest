@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
     "farm_renders_dir": "",
     "farm_sync_dir": "",
     "farm_sync_prune": False,
-    "farm_version_output": False,
+    "farm_version_output": True,
     "master_renders_dir": "",
 }
 
