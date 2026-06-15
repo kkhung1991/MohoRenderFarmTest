@@ -856,6 +856,20 @@ class _Switch(QCheckBox):
         p.end()
 
 
+class _ClickRow(QFrame):
+    """A flat card row that runs a callback when clicked (popover server row)."""
+
+    def __init__(self, on_click, parent=None):
+        super().__init__(parent)
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._on_click:
+            self._on_click()
+        super().mouseReleaseEvent(e)
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -1104,7 +1118,7 @@ class MainWindow(QMainWindow):
         """Draw a simple line glyph for a nav section (grey, or blue when active)."""
         import math
         from PyQt6.QtGui import QPixmap, QPainter, QColor, QPen, QPolygonF, QIcon
-        from PyQt6.QtCore import QPointF
+        from PyQt6.QtCore import QPointF, QRectF
         S = 44
         pm = QPixmap(S, S)
         pm.fill(Qt.GlobalColor.transparent)
@@ -1124,6 +1138,13 @@ class MainWindow(QMainWindow):
         elif kind == "menu":
             for y in (16, 22, 28):
                 p.drawLine(14, y, 30, y)
+        elif kind == "server":
+            # two stacked rack units, each with a small status LED
+            for y in (14, 24):
+                p.drawRoundedRect(QRectF(12, y, 20, 7), 2.2, 2.2)
+                p.setBrush(col)
+                p.drawEllipse(QPointF(16, y + 3.5), 1.3, 1.3)
+                p.setBrush(Qt.BrushStyle.NoBrush)
         elif kind == "sliders":
             ys = (15, 22, 29)
             knob = (29, 17, 25)
@@ -1166,13 +1187,14 @@ class MainWindow(QMainWindow):
         return QIcon(pm)
 
     # ---- macOS menu-bar (system tray) icon ----
-    def _make_app_icon(self, mask=False):
+    def _make_app_icon(self, mask=False, dot=None):
         """Build the grey Moho 'm.' mark in a rounded box (no outline) as a QIcon.
 
         Recreates Moho's playful lowercase 'm.' wordmark (hooked first stroke,
         two bouncy humps, trailing dot). mask=True returns a monochrome template
         icon (adapts to the macOS menu bar); mask=False returns the grey app
-        icon for the window / popover."""
+        icon for the window / popover. When ``dot`` is a colour string, a status
+        badge (e.g. red while rendering, green when done) is drawn in the corner."""
         from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QPen, QPainterPath
         from PyQt6.QtCore import QRectF, QPointF
         base = 44
@@ -1227,9 +1249,16 @@ class MainWindow(QMainWindow):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(mark)
             p.drawEllipse(dot_c, dot_r, dot_r)
+
+        # Status badge in the top-right corner (always opaque/colored).
+        if dot:
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            p.setPen(QPen(QColor("#ffffff"), 1.7))
+            p.setBrush(QColor(dot))
+            p.drawEllipse(QPointF(35.5, 9.0), 5.4, 5.4)
         p.end()
         icon = QIcon(pm)
-        if mask:
+        if mask and not dot:
             try:
                 icon.setIsMask(True)
             except Exception:
@@ -1311,10 +1340,34 @@ class MainWindow(QMainWindow):
         head.addWidget(gear)
         cl.addLayout(head)
 
-        # Status pill
+        # Status row: a coloured light + label
+        status_row = QHBoxLayout()
+        status_row.setSpacing(7)
+        self._pop_dot = QLabel()
+        self._pop_dot.setFixedWidth(11)
+        self._pop_dot.setPixmap(self._dot_pixmap("#9aa0a8", 9))
         self._pop_status = QLabel("Idle")
         self._pop_status.setObjectName("popoverStatus")
-        cl.addWidget(self._pop_status)
+        status_row.addWidget(self._pop_dot)
+        status_row.addWidget(self._pop_status)
+        status_row.addStretch()
+        cl.addLayout(status_row)
+
+        # Live render progress (hidden when idle)
+        self._pop_prog_wrap = QWidget()
+        pw = QVBoxLayout(self._pop_prog_wrap)
+        pw.setContentsMargins(0, 0, 0, 0)
+        pw.setSpacing(4)
+        self._pop_prog_label = QLabel("")
+        self._pop_prog_label.setObjectName("popoverProgLabel")
+        self._pop_prog = QProgressBar()
+        self._pop_prog.setRange(0, 100)
+        self._pop_prog.setTextVisible(True)
+        self._pop_prog.setFormat("%p%")
+        pw.addWidget(self._pop_prog_label)
+        pw.addWidget(self._pop_prog)
+        self._pop_prog_wrap.setVisible(False)
+        cl.addWidget(self._pop_prog_wrap)
 
         # Master row (toggle)
         self._sw_master = _Switch()
@@ -1326,6 +1379,14 @@ class MainWindow(QMainWindow):
         self._sw_slave.toggled.connect(self._on_pop_slave_toggled)
         cl.addWidget(self._popover_row("transfers", "Render Slave",
                                        "Connect to a master and render", self._sw_slave))
+
+        # Render servers (icon + name + status light, click to send a file)
+        self._pop_servers_caption = QLabel("RENDER SERVERS")
+        self._pop_servers_caption.setObjectName("popoverCaption")
+        cl.addWidget(self._pop_servers_caption)
+        self._pop_servers_box = QVBoxLayout()
+        self._pop_servers_box.setSpacing(8)
+        cl.addLayout(self._pop_servers_box)
 
         # Footer
         foot = QHBoxLayout()
@@ -1341,6 +1402,7 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(card)
         self._popover = pop
+        self._refresh_popover()
 
     def _popover_row(self, icon_kind, title, subtitle, trailing):
         row = QFrame()
@@ -1378,20 +1440,82 @@ class MainWindow(QMainWindow):
             self._stop_slave()
         self._refresh_popover()
 
+    def _dot_pixmap(self, color, d=9):
+        """A small filled status-light circle, crisp on hi-dpi."""
+        from PyQt6.QtGui import QPixmap, QPainter, QColor
+        ss = 4
+        pm = QPixmap(d * ss, d * ss)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        p.drawEllipse(0, 0, d * ss, d * ss)
+        p.end()
+        pm.setDevicePixelRatio(ss)
+        return pm
+
+    _STATE_COLORS = {"rendering": "#e5484d", "done": "#1f9d57", "idle": "#9aa0a8"}
+
+    def _active_render_info(self):
+        """Aggregate live render jobs across local queue, slave and master.
+
+        Returns (is_rendering, label, percent)."""
+        jobs = {}
+        try:
+            for j in self.queue.current_jobs:
+                jobs[j.id] = j
+        except Exception:
+            pass
+        if self.slave_client:
+            try:
+                for j in self.slave_client.current_jobs:
+                    jobs[j.id] = j
+            except Exception:
+                pass
+        if self.master_server:
+            try:
+                for j in list(self.master_server.active_jobs.values()):
+                    jobs[j.id] = j
+            except Exception:
+                pass
+        jobs = list(jobs.values())
+        if not jobs:
+            return (False, "", 0)
+        pct = sum(float(getattr(j, "progress", 0.0) or 0.0) for j in jobs) / len(jobs)
+        if len(jobs) == 1:
+            label = f"Rendering {jobs[0].project_name}"
+        else:
+            label = f"Rendering {len(jobs)} projects"
+        return (True, label, pct)
+
+    def _render_state(self):
+        """Return (state, label, percent) where state is rendering/done/idle."""
+        is_rendering, label, pct = self._active_render_info()
+        if is_rendering:
+            return ("rendering", label, pct)
+        if getattr(self, "_render_done", False):
+            return ("done", "Last render complete", 100)
+        return ("idle", "", 0)
+
     def _refresh_popover(self):
         if not getattr(self, "_popover", None):
             return
         master_on = self.master_server is not None
         slave_on = self.slave_client is not None
-        rendering = (getattr(self, "queue", None) is not None
-                     and getattr(self.queue, "is_running", False))
         for sw, state in ((self._sw_master, master_on), (self._sw_slave, slave_on)):
             sw.blockSignals(True)
             sw.setChecked(state)
             sw.blockSignals(False)
             sw.update()
-        if rendering:
+
+        rstate, label, pct = self._render_state()
+        self._pop_dot.setPixmap(self._dot_pixmap(
+            self._STATE_COLORS.get(rstate, "#9aa0a8"), 9))
+        if rstate == "rendering":
             txt = "Rendering…"
+        elif rstate == "done":
+            txt = "Render complete"
         elif master_on and slave_on:
             txt = "Master + Slave running"
         elif master_on:
@@ -1401,6 +1525,146 @@ class MainWindow(QMainWindow):
         else:
             txt = "Idle"
         self._pop_status.setText(txt)
+
+        # Live progress block
+        if rstate == "rendering":
+            self._pop_prog_wrap.setVisible(True)
+            self._pop_prog_label.setText(label or "Rendering…")
+            self._pop_prog.setValue(int(round(pct)))
+        else:
+            self._pop_prog_wrap.setVisible(False)
+
+        self._rebuild_popover_servers()
+        if self._popover.isVisible():
+            self._popover.adjustSize()
+
+    def _rebuild_popover_servers(self):
+        """Repopulate the popover's render-server rows (icon, name, light)."""
+        box = getattr(self, "_pop_servers_box", None)
+        if box is None:
+            return
+
+        import socket
+        rows = []  # (name, sub, color, on_click)
+
+        # This machine
+        me = socket.gethostname() or "This Mac"
+        local_busy = False
+        try:
+            local_busy = bool(self.queue.current_jobs)
+        except Exception:
+            pass
+        if not local_busy and self.slave_client:
+            try:
+                local_busy = bool(self.slave_client.current_jobs)
+            except Exception:
+                pass
+        rows.append((
+            f"{me} · this Mac",
+            "Rendering…" if local_busy else "Ready — click to render here",
+            self._STATE_COLORS["rendering"] if local_busy else self._STATE_COLORS["done"],
+            self._popover_send_local,
+        ))
+
+        # Connected slaves (when this machine is the master)
+        if self.master_server:
+            try:
+                for addr, s in list(self.master_server.slaves.items()):
+                    if not s.is_alive:
+                        col, sub = "#9aa0a8", "Offline"
+                    elif s.status == "rendering":
+                        col, sub = self._STATE_COLORS["rendering"], "Rendering…"
+                    elif not s.render_enabled:
+                        col, sub = "#d9a514", "Rendering disabled"
+                    else:
+                        col, sub = self._STATE_COLORS["done"], "Idle — click to send a file"
+                    rows.append((s.hostname or addr, sub, col,
+                                 (lambda a=addr: self._popover_send_to_farm(a))))
+            except Exception:
+                pass
+        elif self.slave_client:
+            # Connected to a remote master
+            host = self.config.get("network_master_host", "") or "master"
+            rows.append((f"Master · {host}", "Connected — click to send a file",
+                         self._STATE_COLORS["done"], self._popover_send_to_farm))
+
+        # Skip the rebuild (and its flicker) when nothing visible changed.
+        sig = tuple((n, s, c) for n, s, c, _cb in rows)
+        if sig == getattr(self, "_pop_servers_sig", None) and box.count():
+            return
+        self._pop_servers_sig = sig
+        while box.count():
+            item = box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for name, sub, color, cb in rows:
+            box.addWidget(self._server_row(name, sub, color, cb))
+
+    def _server_row(self, name, subtitle, color, on_click):
+        """A clickable server card: server icon, name, subtitle, status light."""
+        row = _ClickRow(on_click)
+        row.setObjectName("popoverRow")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(12, 9, 12, 9)
+        rl.setSpacing(10)
+        ic = QLabel()
+        ic.setPixmap(self._make_nav_icon("server", False).pixmap(20, 20))
+        rl.addWidget(ic)
+        tcol = QVBoxLayout()
+        tcol.setSpacing(1)
+        t = QLabel(name)
+        t.setObjectName("popoverRowTitle")
+        s = QLabel(subtitle)
+        s.setObjectName("popoverRowSub")
+        tcol.addWidget(t)
+        tcol.addWidget(s)
+        rl.addLayout(tcol)
+        rl.addStretch()
+        dot = QLabel()
+        dot.setPixmap(self._dot_pixmap(color, 10))
+        rl.addWidget(dot)
+        return row
+
+    def _pick_moho_files(self):
+        if getattr(self, "_popover", None):
+            self._popover.hide()
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select Moho Project to Render", "",
+            "Moho Projects (*.moho *.anime *.anme);;All Files (*)")
+        return files
+
+    def _popover_send_local(self):
+        """Render picked project(s) on this machine via the local queue."""
+        files = self._pick_moho_files()
+        if not files:
+            return
+        for f in files:
+            self.queue.add_job(self._create_job_from_settings(f))
+            self.config.add_recent_project(f)
+        if not self.queue.is_running:
+            self.queue.start()
+        self._append_log(
+            f"Rendering {len(files)} project(s) locally (from menu bar)")
+        self._refresh_queue_table()
+        self._refresh_popover()
+
+    def _popover_send_to_farm(self, slave_address=None):
+        """Send picked project(s) to the farm (optionally targeting a slave)."""
+        if not self.master_server and not self.slave_client:
+            return
+        files = self._pick_moho_files()
+        if not files:
+            return
+        jobs = []
+        for f in files:
+            jobs.append(self._create_job_from_settings(f))
+            self.config.add_recent_project(f)
+        self._submit_jobs_in_background(jobs, remove_after=False)
+        target = f" to {slave_address}" if slave_address else ""
+        self._append_farm_log(
+            f"[GUI] Sent {len(jobs)} job(s) to farm{target} (from menu bar)")
+        self._refresh_popover()
 
     def _on_tray_activated(self, reason):
         from PyQt6.QtWidgets import QSystemTrayIcon
@@ -1437,7 +1701,47 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def _update_tray_status(self):
-        self._refresh_popover()
+        # Edge-detect render completion to flip the badge green and notify once.
+        is_rendering, label, _pct = self._active_render_info()
+        if is_rendering:
+            self._render_done = False
+        elif getattr(self, "_was_rendering", False):
+            self._render_done = True
+            self._notify_render_done()
+        self._was_rendering = is_rendering
+
+        # Update the menu-bar icon badge only when the state actually changes.
+        state, _, _ = self._render_state()
+        if state != getattr(self, "_tray_state", None):
+            self._tray_state = state
+            self._apply_tray_state_icon(state)
+        # Only repaint the popover while it's actually on screen.
+        if getattr(self, "_popover", None) and self._popover.isVisible():
+            self._refresh_popover()
+
+    def _apply_tray_state_icon(self, state):
+        """Put a red (rendering) / green (done) badge on the menu-bar icon."""
+        if not getattr(self, "tray", None):
+            return
+        from src.utils import platform_utils
+        dot = self._STATE_COLORS.get(state) if state in ("rendering", "done") else None
+        if dot:
+            self.tray.setIcon(self._make_app_icon(mask=False, dot=dot))
+        else:
+            self.tray.setIcon(self._make_app_icon(mask=platform_utils.IS_MACOS))
+
+    def _notify_render_done(self):
+        """Show a system notification from the menu-bar icon when a render ends."""
+        if not getattr(self, "tray", None):
+            return
+        try:
+            from PyQt6.QtWidgets import QSystemTrayIcon
+            self.tray.showMessage(
+                "Render complete",
+                "Your render has finished.",
+                QSystemTrayIcon.MessageIcon.Information, 5000)
+        except Exception:
+            pass
 
     def _quit_app(self):
         try:

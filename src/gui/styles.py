@@ -280,7 +280,15 @@ QToolTip {
 }
 #popoverTitle { font-size: 15px; font-weight: 700; color: #1b1d21; }
 #popoverSub { color: #9aa0a8; font-size: 11px; }
-#popoverStatus { color: #6b7280; font-size: 12px; padding: 0 2px; }
+#popoverStatus { color: #6b7280; font-size: 12px; padding: 0; }
+#popoverCaption {
+    color: #9aa0a8;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 2px 0 2px;
+}
+#popoverProgLabel { color: #4b5057; font-size: 11px; }
 #popoverRow {
     background-color: #ffffff;
     border: 1px solid #ececf0;
