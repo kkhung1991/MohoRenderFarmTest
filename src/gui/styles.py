@@ -274,6 +274,147 @@ QToolTip {
     border: 1px solid #45475a;
     padding: 4px;
 }
+
+/* ===================== Revamped sidebar UI ===================== */
+#sidebar {
+    background-color: #13131c;
+    border-right: 1px solid #26263a;
+}
+#brandLabel {
+    color: #cdd6f4;
+    font-size: 17px;
+    font-weight: 700;
+    padding: 0 4px;
+}
+#brandVersion {
+    color: #6c7086;
+    font-size: 11px;
+    padding: 0 4px;
+}
+#sidebarCaption {
+    color: #6c7086;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 4px;
+}
+#sidebarSep {
+    color: #26263a;
+    background-color: #26263a;
+    max-height: 1px;
+    border: none;
+}
+QPushButton#navButton {
+    text-align: left;
+    padding: 10px 12px;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #a6adc8;
+    font-size: 13px;
+    font-weight: 500;
+}
+QPushButton#navButton:hover {
+    background-color: #1c1c2a;
+    color: #cdd6f4;
+}
+QPushButton#navButton:checked {
+    background-color: #232336;
+    color: #ffffff;
+    border-left: 3px solid #89b4fa;
+    font-weight: 600;
+}
+#content {
+    background-color: #1e1e2e;
+}
+
+/* ===================== Modern polish ===================== */
+QGroupBox {
+    border: 1px solid #2a2a3c;
+    border-radius: 10px;
+    margin-top: 14px;
+    padding-top: 8px;
+    background-color: #1b1b29;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    color: #89b4fa;
+}
+QPushButton {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #3a3a4e;
+    border-radius: 8px;
+    padding: 7px 14px;
+}
+QPushButton:hover { background-color: #3a3a4e; }
+QPushButton:pressed { background-color: #45475a; }
+QPushButton:disabled { color: #6c7086; background-color: #242436; border-color: #2a2a3c; }
+QPushButton#primaryBtn {
+    background-color: #89b4fa;
+    color: #11111b;
+    border: none;
+    font-weight: 600;
+}
+QPushButton#primaryBtn:hover { background-color: #9ec1fb; }
+QPushButton#dangerBtn {
+    background-color: #f38ba8;
+    color: #11111b;
+    border: none;
+    font-weight: 600;
+}
+QPushButton#dangerBtn:hover { background-color: #f5a0b8; }
+QLineEdit, QComboBox, QSpinBox {
+    background-color: #181825;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    padding: 6px 8px;
+    color: #cdd6f4;
+    selection-background-color: #89b4fa;
+    selection-color: #11111b;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border: 1px solid #89b4fa; }
+QTableWidget, QListWidget {
+    background-color: #181825;
+    border: 1px solid #2a2a3c;
+    border-radius: 10px;
+    gridline-color: #26263a;
+}
+QHeaderView::section {
+    background-color: #1b1b29;
+    color: #a6adc8;
+    border: none;
+    border-bottom: 1px solid #2a2a3c;
+    padding: 7px 6px;
+    font-weight: 600;
+}
+QListWidget::item { padding: 7px 8px; border-radius: 6px; }
+QListWidget::item:selected, QTableWidget::item:selected {
+    background-color: #313244;
+    color: #ffffff;
+}
+QProgressBar {
+    border: none;
+    border-radius: 6px;
+    background-color: #26263a;
+    text-align: center;
+    color: #cdd6f4;
+    height: 16px;
+    font-size: 11px;
+}
+QProgressBar::chunk { background-color: #89b4fa; border-radius: 6px; }
+QProgressBar#cpuBar::chunk { background-color: #a6e3a1; border-radius: 6px; }
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #45475a; border-radius: 5px; min-height: 28px; }
+QScrollBar::handle:vertical:hover { background: #585b70; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #45475a; border-radius: 5px; min-width: 28px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """.replace("__CHECK_IMAGE__", _CHECK_IMAGE_PATH) \
    .replace('"Segoe UI", Arial, sans-serif', _UI_FONT) \
    .replace('"Cascadia Code", "Consolas", monospace', _MONO_FONT)

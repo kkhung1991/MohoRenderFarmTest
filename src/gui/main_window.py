@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QSplitter, QStatusBar, QMenuBar, QMenu, QMessageBox,
     QProgressBar, QFormLayout, QGridLayout, QApplication, QAbstractItemView,
     QDialog, QDialogButtonBox, QInputDialog, QScrollArea, QStackedWidget,
-    QListWidget, QListWidgetItem, QSlider,
+    QListWidget, QListWidgetItem, QSlider, QFrame,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QMimeData, QUrl
 from PyQt6.QtGui import (QAction, QDragEnterEvent, QDropEvent, QIcon, QShortcut,
@@ -911,66 +911,98 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(6)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Header
-        header = QHBoxLayout()
-        title = QLabel(APP_NAME)
-        title.setObjectName("titleLabel")
-        subtitle = QLabel(f"v{APP_VERSION} by {APP_AUTHOR}")
-        subtitle.setObjectName("subtitleLabel")
-        header_text = QVBoxLayout()
-        header_text.addWidget(title)
-        header_text.addWidget(subtitle)
-        header.addLayout(header_text)
-        header.addStretch()
+        # ---- Sidebar navigation ----
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(228)
+        sb = QVBoxLayout(sidebar)
+        sb.setContentsMargins(16, 20, 16, 14)
+        sb.setSpacing(4)
 
-        # Right side: progress bars
-        right_col = QVBoxLayout()
-        right_col.setSpacing(2)
+        brand = QLabel(APP_NAME)
+        brand.setObjectName("brandLabel")
+        brand.setWordWrap(True)
+        sb.addWidget(brand)
+        ver = QLabel(f"v{APP_VERSION}")
+        ver.setObjectName("brandVersion")
+        sb.addWidget(ver)
+        sb.addSpacing(18)
 
+        self._nav_box = QVBoxLayout()
+        self._nav_box.setSpacing(4)
+        sb.addLayout(self._nav_box)
+        sb.addStretch(1)
+
+        # Footer status (jobs + CPU)
+        sep = QFrame()
+        sep.setObjectName("sidebarSep")
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sb.addWidget(sep)
+        status_cap = QLabel("STATUS")
+        status_cap.setObjectName("sidebarCaption")
+        sb.addWidget(status_cap)
         self.global_progress = QProgressBar()
-        self.global_progress.setFixedWidth(300)
-        self.global_progress.setFormat("%v/%m jobs completed")
-        right_col.addWidget(self.global_progress)
-
+        self.global_progress.setFormat("%v/%m jobs")
+        sb.addWidget(self.global_progress)
         self.cpu_progress = QProgressBar()
-        self.cpu_progress.setFixedWidth(300)
-        self.cpu_progress.setFixedHeight(18)
         self.cpu_progress.setRange(0, 100)
         self.cpu_progress.setValue(0)
-        self.cpu_progress.setFormat("CPU: %v%")
+        self.cpu_progress.setFormat("CPU %v%")
         self.cpu_progress.setObjectName("cpuBar")
-        right_col.addWidget(self.cpu_progress)
+        sb.addWidget(self.cpu_progress)
+        root.addWidget(sidebar)
 
-        header.addLayout(right_col)
-        main_layout.addLayout(header)
+        # ---- Content area (stacked pages) ----
+        content = QWidget()
+        content.setObjectName("content")
+        cl = QVBoxLayout(content)
+        cl.setContentsMargins(18, 16, 18, 8)
+        cl.setSpacing(0)
+        self.pages = QStackedWidget()
+        cl.addWidget(self.pages)
+        root.addWidget(content, 1)
 
-        # Tabs
-        self.tabs = QTabWidget()
-        main_layout.addWidget(self.tabs)
+        # Pages (each was previously a tab)
+        self._page_names = []
+        self._nav_buttons = []
+        self._add_page("Render Queue", self._create_queue_tab())
+        self._add_page("Render Settings", self._create_settings_tab())
+        self._add_page("Render Farm", self._create_farm_tab())
+        self._add_page("Transfers", self._create_transfers_tab())
+        self._add_page("Renders", self._create_renders_tab())
+        self._add_page("App Settings", self._create_app_settings_tab())
 
-        # Tab 1: Render Queue
-        self.tabs.addTab(self._create_queue_tab(), "Render Queue")
-        # Tab 2: Render Settings
-        self.tabs.addTab(self._create_settings_tab(), "Render Settings")
-        # Tab 3: Render Farm
-        self.tabs.addTab(self._create_farm_tab(), "Render Farm")
-        # Tab 4: Transfers (client file/sync status)
-        self.tabs.addTab(self._create_transfers_tab(), "Transfers")
-        # Tab 5: Renders (browse / play / download finished videos)
-        self.tabs.addTab(self._create_renders_tab(), "Renders")
-        # Tab 6: Settings
-        self.tabs.addTab(self._create_app_settings_tab(), "App Settings")
-
-        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.pages.currentChanged.connect(self._on_tab_changed)
+        self._set_page(0)
 
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
+
+    def _add_page(self, name, widget):
+        """Add a content page and a matching sidebar nav button."""
+        idx = self.pages.addWidget(widget)
+        self._page_names.append(name)
+        btn = QPushButton(name)
+        btn.setObjectName("navButton")
+        btn.setCheckable(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda _checked=False, i=idx: self._set_page(i))
+        self._nav_box.addWidget(btn)
+        self._nav_buttons.append(btn)
+        return idx
+
+    def _set_page(self, index):
+        """Switch the visible page and highlight its nav button."""
+        if 0 <= index < self.pages.count():
+            self.pages.setCurrentIndex(index)
+            for j, b in enumerate(self._nav_buttons):
+                b.setChecked(j == index)
 
     def _create_queue_tab(self):
         widget = QWidget()
@@ -1766,7 +1798,7 @@ class MainWindow(QMainWindow):
     def _refresh_transfers_table(self):
         # Only do work when the tab is visible
         if getattr(self, "_transfers_tab", None) is not None and \
-                self.tabs.currentWidget() is not self._transfers_tab:
+                self.pages.currentWidget() is not self._transfers_tab:
             return
         rows = self._collect_transfer_rows()
         tbl = self.transfers_table
@@ -1892,7 +1924,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, _index):
         if getattr(self, "_renders_tab", None) is not None and \
-                self.tabs.currentWidget() is self._renders_tab:
+                self.pages.currentWidget() is self._renders_tab:
             self._refresh_renders_list()
 
     def _render_dirs(self):
@@ -3709,10 +3741,10 @@ class MainWindow(QMainWindow):
         self.config.set("auto_reconnect_slave", False)
         self._append_log("Auto-reconnecting to master after update...")
         self._append_farm_log("[SLAVE] Auto-reconnecting after update...")
-        # Switch to farm tab
-        for i in range(self.tabs.count()):
-            if self.tabs.tabText(i) == "Render Farm":
-                self.tabs.setCurrentIndex(i)
+        # Switch to farm page
+        for i, nm in enumerate(self._page_names):
+            if nm == "Render Farm":
+                self._set_page(i)
                 break
         self._start_slave()
 
